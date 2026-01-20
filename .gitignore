@@ -1,0 +1,29 @@
+# Go build
+/bin/
+/build/
+/dist/
+*.exe
+*.out
+*.test
+
+# Vendor
+/vendor/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+
+# Logs
+*.log
+
+# Dependency
+/go.sum
