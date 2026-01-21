@@ -23,14 +23,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	dg.AddHandler(handler.OnReady)
-	dg.AddHandler(handler.OnMessage)
+	h := handler.NewHandler("!")
+	dg.AddHandler(h.OnReady)
+	dg.AddHandler(h.OnMessage)
+	dg.AddHandler(h.OnInteractionCreate)
 
 	err = dg.Open()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer dg.Close()
+	defer func() {
+		h.Cleanup(dg)
+		dg.Close()
+	}()
 
 	log.Println("Date:", time.Now().Format("2006-01-02"))
 	select {}

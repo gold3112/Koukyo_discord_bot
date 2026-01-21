@@ -1,4 +1,5 @@
 # .dockerignore
+
 # .envはイメージに含めない（docker-composeのenv_fileで渡す）
 .git
 .gitignore
