@@ -3,11 +3,14 @@ package main
 import (
 	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/handler"
+	"Koukyo_discord_bot/internal/models"
 	"log"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+const BotVersion = "1.0.0-go"
 
 func main() {
 	cfg := config.Load()
@@ -18,12 +21,15 @@ func main() {
 		log.Fatal("DISCORD_TOKEN is required")
 	}
 
+	// Bot情報の初期化
+	botInfo := models.NewBotInfo(BotVersion)
+
 	dg, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	h := handler.NewHandler("!")
+	h := handler.NewHandler("!", botInfo)
 	dg.AddHandler(h.OnReady)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)
@@ -37,6 +43,6 @@ func main() {
 		dg.Close()
 	}()
 
-	log.Println("Date:", time.Now().Format("2006-01-02"))
+	log.Printf("Bot started - Version: %s, Date: %s\n", BotVersion, time.Now().Format("2006-01-02"))
 	select {}
 }

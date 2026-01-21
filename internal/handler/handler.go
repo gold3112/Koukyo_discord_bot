@@ -2,6 +2,7 @@ package handler
 
 import (
 	"Koukyo_discord_bot/internal/commands"
+	"Koukyo_discord_bot/internal/models"
 	"fmt"
 	"log"
 	"strings"
@@ -13,19 +14,25 @@ type Handler struct {
 	registry         *commands.Registry
 	prefix           string
 	registeredCmdIDs []string
+	botInfo          *models.BotInfo
 }
 
-func NewHandler(prefix string) *Handler {
+func NewHandler(prefix string, botInfo *models.BotInfo) *Handler {
 	registry := commands.NewRegistry()
 	
 	// コマンド登録（テキスト＆スラッシュ両対応）
 	registry.Register(&commands.PingCommand{})
 	registry.Register(commands.NewHelpCommand(registry))
+	registry.Register(commands.NewInfoCommand(botInfo))
+	registry.Register(commands.NewNowCommand())
+	registry.Register(commands.NewTimeCommand())
+	registry.Register(commands.NewConvertCommand())
 	
 	return &Handler{
 		registry:         registry,
 		prefix:           prefix,
 		registeredCmdIDs: []string{},
+		botInfo:          botInfo,
 	}
 }
 
