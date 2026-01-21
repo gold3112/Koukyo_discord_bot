@@ -7,5 +7,4 @@ RUN go mod tidy && go build -o bot ./cmd/bot
 FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /app/bot ./bot
-COPY .env .env
 CMD ["./bot"]

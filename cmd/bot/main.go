@@ -4,12 +4,16 @@ import (
 	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/handler"
 	"log"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 func main() {
 	cfg := config.Load()
+	if cfg == nil {
+		log.Fatal("Failed to load configuration")
+	}
 	if cfg.Token == "" {
 		log.Fatal("DISCORD_TOKEN is required")
 	}
@@ -28,6 +32,6 @@ func main() {
 	}
 	defer dg.Close()
 
-	log.Println("Bot is running")
+	log.Println("Date:", time.Now().Format("2006-01-02"))
 	select {}
 }
