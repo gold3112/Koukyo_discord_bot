@@ -51,7 +51,7 @@ Koukyo_discord_bot/
 
 ### 情報表示
 - **`!info` / `/info`** - Botバージョン・稼働時間表示
-- **`!now` / `/now`** - 現在の監視状況表示（仮実装）
+- **`!now` / `/now`** - 現在の監視状況表示（WebSocket連携✅）
 - **`!time` / `/time`** - 世界各地の現在時刻表示
 
 ### 座標変換
@@ -61,6 +61,28 @@ Koukyo_discord_bot/
   - ピクセル座標 → 経度緯度
 - **`/convert coords:<TlX-TlY-PxX-PxY>`**
   - ハイフン形式での座標変換
+
+## 🌐 WebSocket監視機能 (Phase 2)
+
+### 現在の状態: ✅ **稼働中**
+
+- **WebSocket URL**: `wss://gold3112.online/ws`
+- **接続状態**: リアルタイムでデータ受信中
+- **差分率**: 0.03%（最新値）
+- **加重差分率**: 0.05%（菊重視）
+- **データ履歴**: 最大20,000件保存
+
+### 実装済み機能
+- ✅ WebSocket自動接続・再接続
+- ✅ バイナリデータのデコード
+- ✅ リアルタイム差分率の取得
+- ✅ スレッドセーフな状態管理
+- ✅ `/now` コマンドでのデータ表示
+
+### 改善予定
+- 🚧 画像の並列表示（ライブ+差分）
+- 🚧 詳細ピクセル情報（菊/背景の内訳）
+- 📋 通知システム（閾値設定）
 
 #### 座標変換の例
 ```
@@ -111,24 +133,31 @@ docker-compose down
 
 ## 📝 移植状況
 
-### Phase 1: 基本コマンド実装 ✅
+### Phase 1: 基本コマンド実装 ✅ (100%)
 - [x] info - Bot情報表示
 - [x] now - 監視ステータス（仮実装）
 - [x] time - タイムゾーン表示
 - [x] convert - 座標変換
+- [x] ping - 疎通確認
+- [x] help - コマンド一覧
 
-### Phase 2: ユーザー追跡機能 🚧
+### Phase 2: WebSocket監視機能 🚧 (50%)
+- [x] WebSocket接続 ✅
+- [x] リアルタイム差分検知 ✅
+- [x] データ受信・状態管理 ✅
+- [x] Discord Intents設定 ✅
+- [ ] 画像表示（/now コマンド）🚧
+- [ ] 詳細情報表示（/info コマンド）🚧
+- [ ] 通知システム 📋
+
+### Phase 3: ユーザー追跡機能 📋 (0%)
 - [ ] grfusr - 荒らしユーザーリスト
 - [ ] fixusr - 修復者ユーザーリスト
 - [ ] leaderboard - ランキング表示
 
-### Phase 3: 監視機能 📋
-- [ ] WebSocket接続
-- [ ] リアルタイム差分検知
-- [ ] 通知システム
-
-### Phase 4: 高度な機能 📋
+### Phase 4: 高度な機能 📋 (0%)
 - [ ] 統計分析
+- [ ] グラフ生成
 - [ ] 予測モデル (LSTM/Hawkes)
 - [ ] タイムラプス生成
 
@@ -149,6 +178,6 @@ go mod tidy
 
 MIT License
 
-## 🙏 クレジット
+## 移植元
 
-移植元: [wplace-koukyo-bot (Python)](https://github.com/gold3112/wplace-koukyo-bot)
+[wplace-koukyo-bot (Python)](https://github.com/gold3112/wplace-koukyo-bot)

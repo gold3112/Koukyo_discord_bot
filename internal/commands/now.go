@@ -26,6 +26,37 @@ func (c *NowCommand) Description() string {
 
 func (c *NowCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
 	embed := embeds.BuildNowEmbed(c.monitor)
+	
+	// 画像データを取得
+	images := c.monitor.GetLatestImages()
+	if images != nil && len(images.LiveImage) > 0 && len(images.DiffImage) > 0 {
+		// 画像結合（Live + Diff）
+		combinedImage, err := embeds.CombineImages(images.LiveImage, images.DiffImage)
+		if err != nil {
+			log.Printf("Failed to combine images: %v", err)
+			// 画像なしで送信
+			_, err = s.ChannelMessageSendEmbed(m.ChannelID, embed)
+			return err
+		}
+		
+		// 画像付きで送信
+		embed.Image = &discordgo.MessageEmbedImage{
+			URL: "attachment://koukyo_combined.png",
+		}
+		
+		_, err = s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
+			Embeds: []*discordgo.MessageEmbed{embed},
+			Files: []*discordgo.File{
+				{
+					Name:   "koukyo_combined.png",
+					Reader: combinedImage,
+				},
+			},
+		})
+		return err
+	}
+	
+	// 画像がない場合は通常のEmbedのみ
 	_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
 	return err
 }
@@ -48,7 +79,44 @@ func (c *NowCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 	embed := embeds.BuildNowEmbed(c.monitor)
 	log.Println("Embed built successfully")
 
-	// フォローアップメッセージで送信
+	// 画像データを取得
+	images := c.monitor.GetLatestImages()
+	if images != nil && len(images.LiveImage) > 0 && len(images.DiffImage) > 0 {
+		// 画像結合（Live + Diff）
+		combinedImage, err := embeds.CombineImages(images.LiveImage, images.DiffImage)
+		if err != nil {
+			log.Printf("Failed to combine images: %v", err)
+			// 画像なしで送信
+			_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Embeds: &[]*discordgo.MessageEmbed{embed},
+			})
+			return err
+		}
+		
+		// 画像付きで送信
+		embed.Image = &discordgo.MessageEmbedImage{
+			URL: "attachment://koukyo_combined.png",
+		}
+		
+		log.Println("Sending follow-up message with image...")
+		_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Embeds: &[]*discordgo.MessageEmbed{embed},
+			Files: []*discordgo.File{
+				{
+					Name:   "koukyo_combined.png",
+					Reader: combinedImage,
+				},
+			},
+		})
+		if err != nil {
+			log.Printf("Error in InteractionResponseEdit: %v", err)
+			return err
+		}
+		log.Println("Follow-up message with image sent successfully")
+		return nil
+	}
+
+	// 画像がない場合は通常のEmbedのみ
 	log.Println("Sending follow-up message...")
 	_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Embeds: &[]*discordgo.MessageEmbed{embed},

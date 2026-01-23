@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"sync"
 	"time"
 )
 
@@ -36,6 +37,7 @@ type MonitorState struct {
 	ReferencePixels     ReferencePixels
 	PowerSaveMode       bool
 	ZeroDiffStartTime   *time.Time
+	mu                  sync.RWMutex
 }
 
 // DiffRecord 差分履歴のレコード
@@ -62,6 +64,9 @@ func NewMonitorState() *MonitorState {
 
 // UpdateData 監視データを更新
 func (ms *MonitorState) UpdateData(data *MonitorData) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	
 	data.Timestamp = time.Now()
 	ms.LatestData = data
 
@@ -123,11 +128,15 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 
 // UpdateImages 画像データを更新
 func (ms *MonitorState) UpdateImages(images *ImageData) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	ms.LatestImages = images
 }
 
 // GetLatestDiffPercentage 最新の差分率を取得
 func (ms *MonitorState) GetLatestDiffPercentage() float64 {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	if ms.LatestData != nil {
 		return ms.LatestData.DiffPercentage
 	}
@@ -136,5 +145,21 @@ func (ms *MonitorState) GetLatestDiffPercentage() float64 {
 
 // HasData データを受信済みか
 func (ms *MonitorState) HasData() bool {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	return ms.LatestData != nil
+}
+
+// GetLatestData 最新データのコピーを取得
+func (ms *MonitorState) GetLatestData() *MonitorData {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	
+	if ms.LatestData == nil {
+		return nil
+	}
+	
+	// コピーを返す
+	data := *ms.LatestData
+	return &data
 }

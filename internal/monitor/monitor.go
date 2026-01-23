@@ -143,9 +143,84 @@ func (m *Monitor) handleTextMessage(message []byte) error {
 
 // handleBinaryMessage バイナリメッセージ（画像）を処理
 func (m *Monitor) handleBinaryMessage(message []byte) error {
-	// 画像データの処理（今後実装）
-	log.Printf("Received binary data: %d bytes", len(message))
+	// ヘッダーサイズ: 4バイト (type_id: 1バイト + payload_size: 3バイト)
+	headerSize := 4
+	if len(message) < headerSize {
+		log.Printf("Binary message too short: %d bytes", len(message))
+		return nil
+	}
+
+	typeID := message[0]
+	payload := message[headerSize:]
+
+	log.Printf("Received binary data: %d bytes, type_id=%d, payload_size=%d", len(message), typeID, len(payload))
+
+	// payloadのコピーを作成（元のバッファが上書きされるのを防ぐ）
+	payloadCopy := make([]byte, len(payload))
+	copy(payloadCopy, payload)
+
+	// 画像データを更新
+	m.mu.Lock()
+	if m.State.LatestImages == nil {
+		m.State.LatestImages = &ImageData{}
+	}
+
+	switch typeID {
+	case 2: // Live image
+		// 先頭に余分な00バイトがある場合は削除
+		if len(payloadCopy) > 0 && payloadCopy[0] == 0x00 {
+			payloadCopy = payloadCopy[1:]
+		}
+		m.State.LatestImages.LiveImage = payloadCopy
+		m.State.LatestImages.Timestamp = time.Now()
+		// 最初の16バイトをログに出力してフォーマットを確認
+		if len(payloadCopy) >= 16 {
+			log.Printf("Stored live image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
+		} else {
+			log.Printf("Stored live image: %d bytes", len(payloadCopy))
+		}
+	case 3: // Diff image
+		// 先頭に余分な00バイトがある場合は削除
+		if len(payloadCopy) > 0 && payloadCopy[0] == 0x00 {
+			payloadCopy = payloadCopy[1:]
+		}
+		m.State.LatestImages.DiffImage = payloadCopy
+		m.State.LatestImages.Timestamp = time.Now()
+		// 最初の16バイトをログに出力してフォーマットを確認
+		if len(payloadCopy) >= 16 {
+			log.Printf("Stored diff image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
+		} else {
+			log.Printf("Stored diff image: %d bytes", len(payloadCopy))
+		}
+	default:
+		log.Printf("Unknown binary type_id: %d", typeID)
+	}
+	m.mu.Unlock()
+
 	return nil
+}
+
+// GetLatestData 最新の監視データを取得
+func (m *Monitor) GetLatestData() *MonitorData {
+	return m.State.GetLatestData()
+}
+
+// GetLatestImages 最新の画像データを取得
+func (m *Monitor) GetLatestImages() *ImageData {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	if m.State.LatestImages == nil {
+		return nil
+	}
+	
+	// コピーを返す
+	images := &ImageData{
+		LiveImage: append([]byte(nil), m.State.LatestImages.LiveImage...),
+		DiffImage: append([]byte(nil), m.State.LatestImages.DiffImage...),
+		Timestamp: m.State.LatestImages.Timestamp,
+	}
+	return images
 }
 
 // Stop 監視を停止

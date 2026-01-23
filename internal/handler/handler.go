@@ -2,8 +2,10 @@ package handler
 
 import (
 	"Koukyo_discord_bot/internal/commands"
+	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
+	"Koukyo_discord_bot/internal/notifications"
 	"fmt"
 	"log"
 	"strings"
@@ -17,9 +19,11 @@ type Handler struct {
 	registeredCmdIDs []string
 	botInfo          *models.BotInfo
 	monitor          *monitor.Monitor
+	settings         *config.SettingsManager
+	notifier         *notifications.Notifier
 }
 
-func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor) *Handler {
+func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settings *config.SettingsManager, notifier *notifications.Notifier) *Handler {
 	registry := commands.NewRegistry()
 
 	// コマンド登録（テキスト＆スラッシュ両対応）
@@ -30,6 +34,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor) *H
 	registry.Register(commands.NewNowCommand(mon))
 	registry.Register(commands.NewTimeCommand())
 	registry.Register(commands.NewConvertCommand())
+	registry.Register(commands.NewSettingsCommand(settings, notifier))
 
 	return &Handler{
 		registry:         registry,
@@ -37,6 +42,8 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor) *H
 		registeredCmdIDs: []string{},
 		botInfo:          botInfo,
 		monitor:          mon,
+		settings:         settings,
+		notifier:         notifier,
 	}
 }
 
@@ -95,15 +102,26 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 }
 
-// OnInteractionCreate スラッシュコマンドハンドラー
+// OnInteractionCreate スラッシュコマンド・ボタン・モーダルハンドラー
 func (h *Handler) OnInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	log.Printf("Interaction received: Type=%d", i.Type)
 	
-	if i.Type != discordgo.InteractionApplicationCommand {
-		log.Println("Not an application command, ignoring")
-		return
+	switch i.Type {
+	case discordgo.InteractionApplicationCommand:
+		// スラッシュコマンド
+		h.handleSlashCommand(s, i)
+	case discordgo.InteractionMessageComponent:
+		// ボタンやセレクトメニュー
+		h.handleMessageComponent(s, i)
+	case discordgo.InteractionModalSubmit:
+		// モーダル送信
+		h.handleModalSubmit(s, i)
+	default:
+		log.Printf("Unknown interaction type: %d", i.Type)
 	}
+}
 
+func (h *Handler) handleSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	cmdName := i.ApplicationCommandData().Name
 	log.Printf("Slash command: /%s", cmdName)
 	
@@ -126,6 +144,38 @@ func (h *Handler) OnInteractionCreate(s *discordgo.Session, i *discordgo.Interac
 	} else {
 		log.Printf("Slash command %s completed", cmdName)
 	}
+}
+
+func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	customID := i.MessageComponentData().CustomID
+	log.Printf("Message component: %s", customID)
+
+	// 設定パネルのボタン
+	if strings.HasPrefix(customID, "settings_") {
+		commands.HandleSettingsButtonInteraction(s, i, h.settings, h.notifier)
+		return
+	}
+
+	// 設定パネルのセレクトメニュー
+	if strings.HasPrefix(customID, "select_") {
+		commands.HandleSettingsSelectMenu(s, i, h.settings)
+		return
+	}
+
+	log.Printf("Unknown message component: %s", customID)
+}
+
+func (h *Handler) handleModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	modalID := i.ModalSubmitData().CustomID
+	log.Printf("Modal submit: %s", modalID)
+
+	// 設定モーダル
+	if strings.HasPrefix(modalID, "modal_set_") {
+		commands.HandleSettingsModalSubmit(s, i, h.settings, h.notifier)
+		return
+	}
+
+	log.Printf("Unknown modal: %s", modalID)
 }
 
 // SyncSlashCommands スラッシュコマンドをDiscordに同期

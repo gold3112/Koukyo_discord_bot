@@ -4,3 +4,5 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    volumes:
+      - ./data:/app/data  # 設定ファイルの永続化

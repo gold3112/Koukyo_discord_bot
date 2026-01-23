@@ -5,7 +5,10 @@ import (
 	"Koukyo_discord_bot/internal/handler"
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
+	"Koukyo_discord_bot/internal/notifications"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 	_ "time/tzdata"
 
@@ -29,7 +32,18 @@ func main() {
 	// Bot情報の初期化
 	botInfo := models.NewBotInfo(BotVersion)
 
+	// 設定マネージャーの初期化
+	// Dockerコンテナ内では /app/data に保存
+	settingsPath := filepath.Join(".", "data", "settings.json")
+	if _, err := os.Stat("/app"); err == nil {
+		// Dockerコンテナ内
+		settingsPath = "/app/data/settings.json"
+	}
+	settingsManager := config.NewSettingsManager(settingsPath)
+	log.Printf("Settings loaded from: %s", settingsPath)
+
 	// WebSocket監視の開始
+	var globalMonitor *monitor.Monitor
 	if cfg.WebSocketURL != "" {
 		globalMonitor = monitor.NewMonitor(cfg.WebSocketURL)
 		if err := globalMonitor.Start(); err != nil {
@@ -50,7 +64,15 @@ func main() {
 	// Intentsを設定
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent | discordgo.IntentsGuilds
 
-	h := handler.NewHandler("!", botInfo, globalMonitor)
+	// 通知システムの初期化
+	var notifier *notifications.Notifier
+	if globalMonitor != nil {
+		notifier = notifications.NewNotifier(dg, globalMonitor, settingsManager)
+		notifier.StartMonitoring()
+		log.Println("Notification system started")
+	}
+
+	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier)
 	dg.AddHandler(h.OnReady)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)

@@ -1,6 +1,7 @@
 package embeds
 
 import (
+	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/utils"
@@ -393,4 +394,81 @@ func formatUptime(d time.Duration) string {
 		return fmt.Sprintf("%d分 %d秒", minutes, seconds)
 	}
 	return fmt.Sprintf("%d秒", seconds)
+}
+// BuildSettingsEmbed 設定パネル用のEmbedを作成
+func BuildSettingsEmbed(settings *config.SettingsManager, guildID string) *discordgo.MessageEmbed {
+guildSettings := settings.GetGuildSettings(guildID)
+
+// 自動通知の状態
+notifyStatus := "❌ OFF"
+if guildSettings.AutoNotifyEnabled {
+notifyStatus = "✅ ON"
+}
+
+// 通知指標のラベル
+metricLabel := "全体差分率"
+if guildSettings.NotificationMetric == "weighted" {
+metricLabel = "加重差分率 (菊重視)"
+}
+
+// 通知チャンネル
+channelText := "(未設定)"
+if guildSettings.NotificationChannel != nil {
+channelText = fmt.Sprintf("<#%s>", *guildSettings.NotificationChannel)
+}
+
+// メンションロール
+roleText := "(なし)"
+if guildSettings.MentionRole != nil {
+roleText = fmt.Sprintf("<@&%s>", *guildSettings.MentionRole)
+}
+
+embed := &discordgo.MessageEmbed{
+Title:       "⚙️ Bot設定パネル",
+Description: "サーバーごとの通知設定を管理します",
+Color:       0x5865F2, // Discord Blurple
+Fields: []*discordgo.MessageEmbedField{
+{
+Name:   "自動通知",
+Value:  fmt.Sprintf("**%s**", notifyStatus),
+Inline: false,
+},
+{
+Name:   "通知チャンネル",
+Value:  channelText,
+Inline: true,
+},
+{
+Name:   "通知指標",
+Value:  fmt.Sprintf("**%s**", metricLabel),
+Inline: true,
+},
+{
+Name:   "通知遅延",
+Value:  fmt.Sprintf("**%.1f秒**", guildSettings.NotificationDelay),
+Inline: true,
+},
+{
+Name:   "通知閾値",
+Value:  fmt.Sprintf("**%.0f%%**", guildSettings.NotificationThreshold),
+Inline: true,
+},
+{
+Name:   "メンション閾値",
+Value:  fmt.Sprintf("**%.0f%%**", guildSettings.MentionThreshold),
+Inline: true,
+},
+{
+Name:   "メンションロール",
+Value:  roleText,
+Inline: true,
+},
+},
+Footer: &discordgo.MessageEmbedFooter{
+Text: "ボタンをクリックして設定を変更できます",
+},
+Timestamp: time.Now().Format(time.RFC3339),
+}
+
+return embed
 }
