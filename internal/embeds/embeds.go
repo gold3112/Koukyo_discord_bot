@@ -5,7 +5,9 @@ import (
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/utils"
+	"Koukyo_discord_bot/internal/version"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -14,19 +16,45 @@ import (
 // BuildInfoEmbed info コマンド用の埋め込みを作成
 func BuildInfoEmbed(botInfo *models.BotInfo) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{
-		Title:       "🏯 Wplace監視Bot情報",
-		Description: "皇居のWplace監視を行うDiscord Botです。",
+		Title:       "🏯 Wplace監視テンプレート情報",
+		Description: "テンプレート画像に基づく固定値です。（荒らし状況に依存しません）",
 		Color:       0xFFD700, // Gold
 		Fields: []*discordgo.MessageEmbedField{
 			{
-				Name:   "📌 Bot バージョン",
-				Value:  botInfo.Version,
-				Inline: true,
+				Name:   "📐 総ピクセル数",
+				Value:  "全体: 10,354\n菊: 2,968\n背景: 7,386",
+				Inline: false,
 			},
 			{
-				Name:   "⏱️ 稼働時間",
-				Value:  formatUptime(botInfo.Uptime()),
-				Inline: true,
+				Name:   "📊 最新受信値",
+				Value:  "全体: 10,354 | 菊: 2,968 | 背景: 7,386",
+				Inline: false,
+			},
+		},
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "Koukyo Discord Bot - Wplace監視システム",
+		},
+	}
+	return embed
+}
+
+// BuildBotStartupEmbed Bot起動時の通知Embedを作成
+func BuildBotStartupEmbed(botInfo *models.BotInfo) *discordgo.MessageEmbed {
+	// パッチノートをフォーマット
+	patchNotesText := "**主な更新内容**\n"
+	for _, note := range version.PatchNotes {
+		patchNotesText += fmt.Sprintf("• %s\n", note)
+	}
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "皇居Bot パッチノート",
+		Description: "Botが起動・更新されました。",
+		Color:       0x2ECC71, // Green
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "📌 バージョン",
+				Value:  fmt.Sprintf("Ver. %s", version.Version),
+				Inline: false,
 			},
 			{
 				Name:   "🕐 起動時刻",
@@ -34,19 +62,20 @@ func BuildInfoEmbed(botInfo *models.BotInfo) *discordgo.MessageEmbed {
 				Inline: false,
 			},
 			{
-				Name:   "💡 主な機能",
-				Value:  "• リアルタイム監視（準備中）\n• 座標変換システム\n• タイムゾーン表示\n• コマンドヘルプ",
+				Name:   "📝 " + "主な更新内容",
+				Value:  patchNotesText,
 				Inline: false,
 			},
 			{
-				Name:   "🔗 移植元",
-				Value:  "[wplace-koukyo-bot](https://github.com/gold3112/wplace-koukyo-bot)",
+				Name:   "💬 サポート",
+				Value:  fmt.Sprintf("[Discord サポートサーバーに参加](%s)", version.SupportServerURL),
 				Inline: false,
 			},
 		},
 		Footer: &discordgo.MessageEmbedFooter{
-			Text: "Koukyo Discord Bot - Go Edition | 開発中",
+			Text: "Koukyo Discord Bot - Go Edition | Wplace監視システム",
 		},
+		Timestamp: time.Now().Format(time.RFC3339),
 	}
 	return embed
 }
@@ -152,7 +181,7 @@ func BuildConvertPixelEmbed(tileX, tileY, pixelX, pixelY int) *discordgo.Message
 // BuildNowEmbed now コマンド用の埋め込みを作成
 func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 	now := time.Now()
-	
+
 	// JSTに変換（タイムゾーンデータがない場合はUTC+9で代用）
 	jstLoc, err := time.LoadLocation("Asia/Tokyo")
 	if err != nil {
@@ -204,7 +233,7 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 
 	// データがある場合
 	data := mon.State.LatestData
-	
+
 	// 差分率の表示
 	diffValue := fmt.Sprintf("%.2f%%", data.DiffPercentage)
 	if data.DiffPercentage == 0 {
@@ -221,18 +250,11 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 	}
 
 	// ピクセル情報
-	pixelInfo := fmt.Sprintf("差分: **%s** / 全体: **%s**",
-		formatNumber(data.DiffPixels),
-		formatNumber(data.TotalPixels))
-
-	detailPixelInfo := ""
-	if data.WeightedDiffPercentage != nil {
-		detailPixelInfo = fmt.Sprintf("菊: **%s** / **%s** | 背景: **%s** / **%s**",
-			formatNumber(data.ChrysanthemumDiffPixels),
-			formatNumber(data.ChrysanthemumTotalPixels),
-			formatNumber(data.BackgroundDiffPixels),
-			formatNumber(data.BackgroundTotalPixels))
-	}
+	detailPixelInfo := fmt.Sprintf("菊 %d / %d | 背景 %d / %d",
+		data.ChrysanthemumDiffPixels,
+		data.ChrysanthemumTotalPixels,
+		data.BackgroundDiffPixels,
+		data.BackgroundTotalPixels)
 
 	// 色の決定
 	color := 0x2ECC71 // Green
@@ -250,16 +272,26 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 			{
 				Name:   "📊 差分率 (全体)",
 				Value:  diffValue,
-				Inline: true,
+				Inline: false,
 			},
 			{
-				Name:   "📊 加重差分率 (菊重視)",
+				Name:   "📈 差分ピクセル (全体)",
+				Value:  fmt.Sprintf("%d / %d", data.DiffPixels, data.TotalPixels),
+				Inline: false,
+			},
+			{
+				Name:   "🔍 加重差分率 (菊重視)",
 				Value:  weightedDiffValue,
-				Inline: true,
+				Inline: false,
 			},
 			{
-				Name:   "📈 ピクセル情報",
-				Value:  pixelInfo,
+				Name:   "🔍 差分ピクセル (菊/背景)",
+				Value:  detailPixelInfo,
+				Inline: false,
+			},
+			{
+				Name:   "📐 監視ピクセル数",
+				Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 				Inline: false,
 			},
 		},
@@ -267,15 +299,6 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 		Footer: &discordgo.MessageEmbedFooter{
 			Text: fmt.Sprintf("最終更新 | データ件数: %d件", len(mon.State.DiffHistory)),
 		},
-	}
-
-	// 詳細ピクセル情報を追加
-	if detailPixelInfo != "" {
-		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
-			Name:   "🔍 詳細 (菊/背景)",
-			Value:  detailPixelInfo,
-			Inline: false,
-		})
 	}
 
 	// 省電力モードの表示
@@ -306,7 +329,7 @@ func formatNumber(n int) string {
 	if n == 0 {
 		return "0"
 	}
-	
+
 	s := fmt.Sprintf("%d", n)
 	var result []rune
 	for i, c := range s {
@@ -322,12 +345,27 @@ func formatNumber(n int) string {
 func BuildStatusEmbed(botInfo *models.BotInfo, session *discordgo.Session) *discordgo.MessageEmbed {
 	uptime := botInfo.Uptime()
 
-	// サーバー数とユーザー数を取得
+	// サーバー数を取得
 	guildCount := len(session.State.Guilds)
+
+	// メモリ情報を取得
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	allocMB := float64(m.Alloc) / 1024 / 1024
+	totalMB := float64(m.TotalAlloc) / 1024 / 1024
+	sysMB := float64(m.Sys) / 1024 / 1024
+
+	// 次回再起動予定時刻（24時間ごと）
+	nextRestart := botInfo.StartTime.Add(24 * time.Hour)
+	timeUntilRestart := time.Until(nextRestart)
+	if timeUntilRestart < 0 {
+		nextRestart = nextRestart.Add(24 * time.Hour)
+		timeUntilRestart = time.Until(nextRestart)
+	}
 
 	embed := &discordgo.MessageEmbed{
 		Title:       "🤖 Bot ステータス",
-		Description: "詳細な稼働状況",
+		Description: "Bot自体のステータス（稼働時間、メモリ、次回再起動まで）",
 		Color:       0x2ECC71, // Green
 		Fields: []*discordgo.MessageEmbedField{
 			{
@@ -336,39 +374,29 @@ func BuildStatusEmbed(botInfo *models.BotInfo, session *discordgo.Session) *disc
 				Inline: true,
 			},
 			{
-				Name:   "📌 バージョン",
-				Value:  botInfo.Version,
+				Name:   "🕐 起動時刻",
+				Value:  botInfo.StartTime.Format("2006-01-02 15:04:05"),
+				Inline: true,
+			},
+			{
+				Name:   "🔄 次回再起動",
+				Value:  fmt.Sprintf("%s\n(あと %s)", nextRestart.Format("2006-01-02 15:04:05"), formatUptime(timeUntilRestart)),
+				Inline: false,
+			},
+			{
+				Name:   "💾 メモリ使用量",
+				Value:  fmt.Sprintf("確保: %.2f MB\n総確保: %.2f MB\nシステム: %.2f MB", allocMB, totalMB, sysMB),
+				Inline: false,
+			},
+			{
+				Name:   "📊 Goroutine数",
+				Value:  fmt.Sprintf("%d", runtime.NumGoroutine()),
 				Inline: true,
 			},
 			{
 				Name:   "🏢 参加サーバー数",
-				Value:  fmt.Sprintf("%d サーバー", guildCount),
+				Value:  fmt.Sprintf("%d", guildCount),
 				Inline: true,
-			},
-			{
-				Name:   "🕐 起動時刻",
-				Value:  botInfo.StartTime.Format("2006-01-02 15:04:05 MST"),
-				Inline: false,
-			},
-			{
-				Name:   "💻 実装言語",
-				Value:  "Go 1.21",
-				Inline: true,
-			},
-			{
-				Name:   "📚 ライブラリ",
-				Value:  "discordgo v0.29.0",
-				Inline: true,
-			},
-			{
-				Name:   "🐳 実行環境",
-				Value:  "Docker",
-				Inline: true,
-			},
-			{
-				Name:   "✨ 実装済み機能",
-				Value:  "✅ 座標変換システム\n✅ タイムゾーン表示\n✅ コマンドシステム\n🚧 WebSocket監視（開発中）",
-				Inline: false,
 			},
 		},
 		Footer: &discordgo.MessageEmbedFooter{
@@ -395,80 +423,81 @@ func formatUptime(d time.Duration) string {
 	}
 	return fmt.Sprintf("%d秒", seconds)
 }
+
 // BuildSettingsEmbed 設定パネル用のEmbedを作成
 func BuildSettingsEmbed(settings *config.SettingsManager, guildID string) *discordgo.MessageEmbed {
-guildSettings := settings.GetGuildSettings(guildID)
+	guildSettings := settings.GetGuildSettings(guildID)
 
-// 自動通知の状態
-notifyStatus := "❌ OFF"
-if guildSettings.AutoNotifyEnabled {
-notifyStatus = "✅ ON"
-}
+	// 自動通知の状態
+	notifyStatus := "❌ OFF"
+	if guildSettings.AutoNotifyEnabled {
+		notifyStatus = "✅ ON"
+	}
 
-// 通知指標のラベル
-metricLabel := "全体差分率"
-if guildSettings.NotificationMetric == "weighted" {
-metricLabel = "加重差分率 (菊重視)"
-}
+	// 通知指標のラベル
+	metricLabel := "全体差分率"
+	if guildSettings.NotificationMetric == "weighted" {
+		metricLabel = "加重差分率 (菊重視)"
+	}
 
-// 通知チャンネル
-channelText := "(未設定)"
-if guildSettings.NotificationChannel != nil {
-channelText = fmt.Sprintf("<#%s>", *guildSettings.NotificationChannel)
-}
+	// 通知チャンネル
+	channelText := "(未設定)"
+	if guildSettings.NotificationChannel != nil {
+		channelText = fmt.Sprintf("<#%s>", *guildSettings.NotificationChannel)
+	}
 
-// メンションロール
-roleText := "(なし)"
-if guildSettings.MentionRole != nil {
-roleText = fmt.Sprintf("<@&%s>", *guildSettings.MentionRole)
-}
+	// メンションロール
+	roleText := "(なし)"
+	if guildSettings.MentionRole != nil {
+		roleText = fmt.Sprintf("<@&%s>", *guildSettings.MentionRole)
+	}
 
-embed := &discordgo.MessageEmbed{
-Title:       "⚙️ Bot設定パネル",
-Description: "サーバーごとの通知設定を管理します",
-Color:       0x5865F2, // Discord Blurple
-Fields: []*discordgo.MessageEmbedField{
-{
-Name:   "自動通知",
-Value:  fmt.Sprintf("**%s**", notifyStatus),
-Inline: false,
-},
-{
-Name:   "通知チャンネル",
-Value:  channelText,
-Inline: true,
-},
-{
-Name:   "通知指標",
-Value:  fmt.Sprintf("**%s**", metricLabel),
-Inline: true,
-},
-{
-Name:   "通知遅延",
-Value:  fmt.Sprintf("**%.1f秒**", guildSettings.NotificationDelay),
-Inline: true,
-},
-{
-Name:   "通知閾値",
-Value:  fmt.Sprintf("**%.0f%%**", guildSettings.NotificationThreshold),
-Inline: true,
-},
-{
-Name:   "メンション閾値",
-Value:  fmt.Sprintf("**%.0f%%**", guildSettings.MentionThreshold),
-Inline: true,
-},
-{
-Name:   "メンションロール",
-Value:  roleText,
-Inline: true,
-},
-},
-Footer: &discordgo.MessageEmbedFooter{
-Text: "ボタンをクリックして設定を変更できます",
-},
-Timestamp: time.Now().Format(time.RFC3339),
-}
+	embed := &discordgo.MessageEmbed{
+		Title:       "⚙️ Bot設定パネル",
+		Description: "サーバーごとの通知設定を管理します",
+		Color:       0x5865F2, // Discord Blurple
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "自動通知",
+				Value:  fmt.Sprintf("**%s**", notifyStatus),
+				Inline: false,
+			},
+			{
+				Name:   "通知チャンネル",
+				Value:  channelText,
+				Inline: true,
+			},
+			{
+				Name:   "通知指標",
+				Value:  fmt.Sprintf("**%s**", metricLabel),
+				Inline: true,
+			},
+			{
+				Name:   "通知遅延",
+				Value:  fmt.Sprintf("**%.1f秒**", guildSettings.NotificationDelay),
+				Inline: true,
+			},
+			{
+				Name:   "通知閾値",
+				Value:  fmt.Sprintf("**%.0f%%**", guildSettings.NotificationThreshold),
+				Inline: true,
+			},
+			{
+				Name:   "メンション閾値",
+				Value:  fmt.Sprintf("**%.0f%%**", guildSettings.MentionThreshold),
+				Inline: true,
+			},
+			{
+				Name:   "メンションロール",
+				Value:  roleText,
+				Inline: true,
+			},
+		},
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "ボタンをクリックして設定を変更できます",
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
 
-return embed
+	return embed
 }

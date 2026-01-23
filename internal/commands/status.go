@@ -20,7 +20,7 @@ func (c *StatusCommand) Name() string {
 }
 
 func (c *StatusCommand) Description() string {
-	return "Botの詳細ステータスを表示します"
+	return "🤖 Bot自体のステータス（稼働時間、メモリ、次回再起動まで）を表示します"
 }
 
 func (c *StatusCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {

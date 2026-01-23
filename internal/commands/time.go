@@ -2,6 +2,9 @@ package commands
 
 import (
 	"Koukyo_discord_bot/internal/embeds"
+	"Koukyo_discord_bot/internal/utils"
+	"fmt"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -17,12 +20,46 @@ func (c *TimeCommand) Name() string {
 }
 
 func (c *TimeCommand) Description() string {
-	return "現在時刻を各タイムゾーンで表示します"
+	return "現在時刻を表示または時差変換を行います"
 }
 
 func (c *TimeCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
-	embed := embeds.BuildTimeEmbed()
-	_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
+	// 引数がない場合は現在時刻を表示
+	if len(args) == 0 {
+		embed := embeds.BuildTimeEmbed()
+		_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
+		return err
+	}
+
+	// 時差変換の引数をパース
+	from, to, timeStr := parseTimeArgs(args)
+
+	if from == "" || to == "" {
+		// エラーメッセージを送信
+		_, err := s.ChannelMessageSend(m.ChannelID,
+			"❌ 使用方法: `!time from:JST to:PST time:23:20` または `!time from:JST to:PST`\n"+
+				"時刻を省略した場合は現在時刻を使用します。")
+		return err
+	}
+
+	// 時差変換を実行
+	result, err := utils.ConvertTime(from, to, timeStr)
+	if err != nil {
+		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ エラー: %s", err.Error()))
+		return e
+	}
+
+	// 結果をEmbedで表示
+	embed := &discordgo.MessageEmbed{
+		Title:       "🌍 時差変換",
+		Description: result,
+		Color:       0x3498DB,
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "時差変換システム",
+		},
+	}
+
+	_, err = s.ChannelMessageSendEmbed(m.ChannelID, embed)
 	return err
 }
 
@@ -41,4 +78,19 @@ func (c *TimeCommand) SlashDefinition() *discordgo.ApplicationCommand {
 		Name:        c.Name(),
 		Description: c.Description(),
 	}
+}
+
+// parseTimeArgs 時差変換の引数をパース
+// 形式: from:JST to:PST time:23:20 (time は省略可能)
+func parseTimeArgs(args []string) (from, to, timeStr string) {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "from:") {
+			from = strings.TrimPrefix(arg, "from:")
+		} else if strings.HasPrefix(arg, "to:") {
+			to = strings.TrimPrefix(arg, "to:")
+		} else if strings.HasPrefix(arg, "time:") {
+			timeStr = strings.TrimPrefix(arg, "time:")
+		}
+	}
+	return
 }

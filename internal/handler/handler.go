@@ -3,6 +3,7 @@ package handler
 import (
 	"Koukyo_discord_bot/internal/commands"
 	"Koukyo_discord_bot/internal/config"
+	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/notifications"
@@ -50,12 +51,85 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 func (h *Handler) OnReady(s *discordgo.Session, event *discordgo.Ready) {
 	log.Println("Bot is ready!")
 	log.Printf("Logged in as: %s#%s", s.State.User.Username, s.State.User.Discriminator)
-	
+
 	// スラッシュコマンドを同期
 	if err := h.SyncSlashCommands(s); err != nil {
 		log.Printf("Error syncing slash commands: %v", err)
 	} else {
 		log.Println("Slash commands synced successfully")
+	}
+
+	// 各ギルドに起動情報を送信
+	h.SendStartupNotification(s)
+}
+
+// SendStartupNotification 起動通知を各ギルドに送信
+func (h *Handler) SendStartupNotification(s *discordgo.Session) {
+	for _, guild := range s.State.Guilds {
+		guildID := guild.ID
+		settings := h.settings.GetGuildSettings(guildID)
+
+		// 通知チャンネルが設定されている場合、そこに送信
+		var channelID string
+		if settings.NotificationChannel != nil {
+			channelID = *settings.NotificationChannel
+		} else {
+			// 通知チャンネルが設定されていない場合は、最初のテキストチャンネルに送信
+			channels, err := s.GuildChannels(guildID)
+			if err != nil {
+				log.Printf("Error fetching guild channels for %s: %v", guildID, err)
+				continue
+			}
+
+			found := false
+			for _, ch := range channels {
+				if ch.Type == discordgo.ChannelTypeGuildText {
+					channelID = ch.ID
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				log.Printf("No text channel found for guild %s", guildID)
+				continue
+			}
+		}
+
+		// Bot起動通知を送信
+		startupEmbed := embeds.BuildBotStartupEmbed(h.botInfo)
+		_, err := s.ChannelMessageSendEmbed(channelID, startupEmbed)
+		if err != nil {
+			log.Printf("Error sending startup embed to guild %s: %v", guildID, err)
+		}
+
+		// 現在の監視情報を送信（データがある場合）
+		if h.monitor != nil && h.monitor.State.HasData() {
+			nowEmbed := embeds.BuildNowEmbed(h.monitor)
+			images := h.monitor.GetLatestImages()
+			if images != nil && len(images.LiveImage) > 0 && len(images.DiffImage) > 0 {
+				combinedImage, err2 := embeds.CombineImages(images.LiveImage, images.DiffImage)
+				if err2 == nil {
+					nowEmbed.Image = &discordgo.MessageEmbedImage{URL: "attachment://koukyo_combined.png"}
+					_, err = s.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+						Embeds: []*discordgo.MessageEmbed{nowEmbed},
+						Files: []*discordgo.File{{
+							Name:   "koukyo_combined.png",
+							Reader: combinedImage,
+						}},
+					})
+				} else {
+					log.Printf("Failed to combine images for startup now: %v", err2)
+					_, err = s.ChannelMessageSendEmbed(channelID, nowEmbed)
+				}
+			} else {
+				_, err = s.ChannelMessageSendEmbed(channelID, nowEmbed)
+			}
+
+			if err != nil {
+				log.Printf("Error sending now embed to guild %s: %v", guildID, err)
+			}
+		}
 	}
 }
 
@@ -105,7 +179,7 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 // OnInteractionCreate スラッシュコマンド・ボタン・モーダルハンドラー
 func (h *Handler) OnInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	log.Printf("Interaction received: Type=%d", i.Type)
-	
+
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
 		// スラッシュコマンド
@@ -124,7 +198,7 @@ func (h *Handler) OnInteractionCreate(s *discordgo.Session, i *discordgo.Interac
 func (h *Handler) handleSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	cmdName := i.ApplicationCommandData().Name
 	log.Printf("Slash command: /%s", cmdName)
-	
+
 	cmd, exists := h.registry.Get(cmdName)
 	if !exists {
 		log.Printf("Unknown slash command: %s", cmdName)

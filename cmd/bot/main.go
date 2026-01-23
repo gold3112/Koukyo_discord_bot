@@ -6,6 +6,7 @@ import (
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/notifications"
+	"Koukyo_discord_bot/internal/version"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,8 +15,6 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 )
-
-const BotVersion = "1.0.0-go"
 
 // Global monitor instance
 var globalMonitor *monitor.Monitor
@@ -30,7 +29,7 @@ func main() {
 	}
 
 	// Bot情報の初期化
-	botInfo := models.NewBotInfo(BotVersion)
+	botInfo := models.NewBotInfo(version.Version)
 
 	// 設定マネージャーの初期化
 	// Dockerコンテナ内では /app/data に保存
@@ -89,6 +88,6 @@ func main() {
 		dg.Close()
 	}()
 
-	log.Printf("Bot started - Version: %s, Date: %s\n", BotVersion, time.Now().Format("2006-01-02"))
+	log.Printf("Bot started - Version: %s, Date: %s\n", version.Version, time.Now().Format("2006-01-02"))
 	select {}
 }
