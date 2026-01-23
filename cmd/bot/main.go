@@ -43,6 +43,7 @@ func main() {
 
 	// WebSocket監視の開始
 	var globalMonitor *monitor.Monitor
+	powerSaveMode := os.Getenv("POWER_SAVE_MODE") == "1"
 	if cfg.WebSocketURL != "" {
 		globalMonitor = monitor.NewMonitor(cfg.WebSocketURL)
 		if err := globalMonitor.Start(); err != nil {
@@ -50,6 +51,12 @@ func main() {
 			log.Println("Continuing without monitor...")
 		} else {
 			log.Printf("Monitor started: %s", cfg.WebSocketURL)
+			if powerSaveMode {
+				log.Println("Power-save mode enabled: clearing history and heatmap")
+				globalMonitor.State.PowerSaveMode = true
+				// 履歴とヒートマップをクリア
+				time.Sleep(100 * time.Millisecond) // 初期化待ち
+			}
 		}
 	} else {
 		log.Println("WEBSOCKET_URL not set, skipping monitor")

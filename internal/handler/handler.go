@@ -36,6 +36,11 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 	registry.Register(commands.NewTimeCommand())
 	registry.Register(commands.NewConvertCommand())
 	registry.Register(commands.NewSettingsCommand(settings, notifier))
+	if mon != nil {
+		registry.Register(commands.NewGraphCommand(mon))
+		registry.Register(commands.NewTimelapseCommand(mon))
+		registry.Register(commands.NewHeatmapCommand(mon))
+	}
 
 	return &Handler{
 		registry:         registry,
@@ -101,6 +106,21 @@ func (h *Handler) SendStartupNotification(s *discordgo.Session) {
 		_, err := s.ChannelMessageSendEmbed(channelID, startupEmbed)
 		if err != nil {
 			log.Printf("Error sending startup embed to guild %s: %v", guildID, err)
+		}
+
+		// 省電力モード通知（環境変数で判定）
+		if h.monitor != nil && h.monitor.State.PowerSaveMode {
+			powerSaveEmbed := &discordgo.MessageEmbed{
+				Title:       "🌙 省電力モード",
+				Description: "差分率0%が継続したため、省電力モードに切り替える再起動を行いました。更新を一時停止しています。",
+				Color:       0x888888,
+				Footer:      &discordgo.MessageEmbedFooter{Text: "差分が検出されると通常運転に戻ります"},
+			}
+			_, err = s.ChannelMessageSendEmbed(channelID, powerSaveEmbed)
+			if err != nil {
+				log.Printf("Error sending power-save embed to guild %s: %v", guildID, err)
+			}
+			continue // 省電力モード時はnow embedは送信しない
 		}
 
 		// 現在の監視情報を送信（データがある場合）
