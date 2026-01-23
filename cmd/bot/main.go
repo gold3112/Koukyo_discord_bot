@@ -4,13 +4,18 @@ import (
 	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/handler"
 	"Koukyo_discord_bot/internal/models"
+	"Koukyo_discord_bot/internal/monitor"
 	"log"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 const BotVersion = "1.0.0-go"
+
+// Global monitor instance
+var globalMonitor *monitor.Monitor
 
 func main() {
 	cfg := config.Load()
@@ -24,12 +29,28 @@ func main() {
 	// Bot情報の初期化
 	botInfo := models.NewBotInfo(BotVersion)
 
+	// WebSocket監視の開始
+	if cfg.WebSocketURL != "" {
+		globalMonitor = monitor.NewMonitor(cfg.WebSocketURL)
+		if err := globalMonitor.Start(); err != nil {
+			log.Printf("Failed to start monitor: %v", err)
+			log.Println("Continuing without monitor...")
+		} else {
+			log.Printf("Monitor started: %s", cfg.WebSocketURL)
+		}
+	} else {
+		log.Println("WEBSOCKET_URL not set, skipping monitor")
+	}
+
 	dg, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	h := handler.NewHandler("!", botInfo)
+	// Intentsを設定
+	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent | discordgo.IntentsGuilds
+
+	h := handler.NewHandler("!", botInfo, globalMonitor)
 	dg.AddHandler(h.OnReady)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)
@@ -40,6 +61,9 @@ func main() {
 	}
 	defer func() {
 		h.Cleanup(dg)
+		if globalMonitor != nil {
+			globalMonitor.Stop()
+		}
 		dg.Close()
 	}()
 

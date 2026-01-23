@@ -3,6 +3,7 @@ package handler
 import (
 	"Koukyo_discord_bot/internal/commands"
 	"Koukyo_discord_bot/internal/models"
+	"Koukyo_discord_bot/internal/monitor"
 	"fmt"
 	"log"
 	"strings"
@@ -15,24 +16,27 @@ type Handler struct {
 	prefix           string
 	registeredCmdIDs []string
 	botInfo          *models.BotInfo
+	monitor          *monitor.Monitor
 }
 
-func NewHandler(prefix string, botInfo *models.BotInfo) *Handler {
+func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor) *Handler {
 	registry := commands.NewRegistry()
-	
+
 	// コマンド登録（テキスト＆スラッシュ両対応）
 	registry.Register(&commands.PingCommand{})
 	registry.Register(commands.NewHelpCommand(registry))
 	registry.Register(commands.NewInfoCommand(botInfo))
-	registry.Register(commands.NewNowCommand())
+	registry.Register(commands.NewStatusCommand(botInfo))
+	registry.Register(commands.NewNowCommand(mon))
 	registry.Register(commands.NewTimeCommand())
 	registry.Register(commands.NewConvertCommand())
-	
+
 	return &Handler{
 		registry:         registry,
 		prefix:           prefix,
 		registeredCmdIDs: []string{},
 		botInfo:          botInfo,
+		monitor:          mon,
 	}
 }
 
@@ -54,10 +58,14 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	log.Printf("Message received: '%s' from %s", m.Content, m.Author.Username)
+
 	// プレフィックスチェック
 	if !strings.HasPrefix(m.Content, h.prefix) {
 		return
 	}
+
+	log.Println("Prefix matched!")
 
 	// コマンドと引数をパース
 	content := strings.TrimPrefix(m.Content, h.prefix)
@@ -69,31 +77,43 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	cmdName := parts[0]
 	args := parts[1:]
 
+	log.Printf("Parsed command: '%s', args: %v", cmdName, args)
+
 	// コマンド実行
 	cmd, exists := h.registry.Get(cmdName)
 	if !exists {
+		log.Printf("Command '%s' not found in registry", cmdName)
 		return
 	}
 
+	log.Printf("Executing text command: %s", cmdName)
 	if err := cmd.ExecuteText(s, m, args); err != nil {
 		log.Printf("Error executing command %s: %v", cmdName, err)
 		s.ChannelMessageSend(m.ChannelID, "An error occurred while executing the command.")
+	} else {
+		log.Printf("Command %s completed successfully", cmdName)
 	}
 }
 
 // OnInteractionCreate スラッシュコマンドハンドラー
 func (h *Handler) OnInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	log.Printf("Interaction received: Type=%d", i.Type)
+	
 	if i.Type != discordgo.InteractionApplicationCommand {
+		log.Println("Not an application command, ignoring")
 		return
 	}
 
 	cmdName := i.ApplicationCommandData().Name
+	log.Printf("Slash command: /%s", cmdName)
+	
 	cmd, exists := h.registry.Get(cmdName)
 	if !exists {
 		log.Printf("Unknown slash command: %s", cmdName)
 		return
 	}
 
+	log.Printf("Executing slash command: /%s", cmdName)
 	if err := cmd.ExecuteSlash(s, i); err != nil {
 		log.Printf("Error executing slash command %s: %v", cmdName, err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -103,6 +123,8 @@ func (h *Handler) OnInteractionCreate(s *discordgo.Session, i *discordgo.Interac
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
+	} else {
+		log.Printf("Slash command %s completed", cmdName)
 	}
 }
 
