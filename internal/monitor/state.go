@@ -205,15 +205,17 @@ func (ms *MonitorState) UpdateImages(images *ImageData) {
 			w := b.Dx()
 			h := b.Dy()
 			if ms.HeatmapGridW == 0 || ms.HeatmapGridH == 0 {
-				// 初期化（200x200グリッド）
-				ms.HeatmapGridW = 200
-				ms.HeatmapGridH = 200
+				// 初期化（画像サイズと同じグリッド）
+				ms.HeatmapGridW = w
+				ms.HeatmapGridH = h
 				ms.HeatmapCounts = make([]uint32, ms.HeatmapGridW*ms.HeatmapGridH)
 				ms.HeatmapSourceW = w
 				ms.HeatmapSourceH = h
 			}
 			// 画像サイズが変わる場合はリセット
 			if w != ms.HeatmapSourceW || h != ms.HeatmapSourceH {
+				ms.HeatmapGridW = w
+				ms.HeatmapGridH = h
 				ms.HeatmapCounts = make([]uint32, ms.HeatmapGridW*ms.HeatmapGridH)
 				ms.HeatmapSourceW = w
 				ms.HeatmapSourceH = h

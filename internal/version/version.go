@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "1.0.2"
+	Version = "1.0.3"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
