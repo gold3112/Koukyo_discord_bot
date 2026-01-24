@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"math"
 	"time"
@@ -14,27 +13,48 @@ import (
 
 // BuildDiffGraphPNG 差分履歴から簡易折れ線グラフPNGを生成
 // history: 時系列の差分率, titleは埋め込み側で使う
+
 func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 	// 画像サイズ
 	const width = 800
 	const height = 400
-	const margin = 40
+	const margin = 56
 
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 
-	// 背景
-	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{240, 240, 240, 255}}, image.Point{}, draw.Src)
+	// 背景グラデーション
+	for y := 0; y < height; y++ {
+		c := uint8(240 - y*20/height)
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{c, c, 255, 255})
+		}
+	}
 
 	// 座標系領域
 	plotRect := image.Rect(margin, margin, width-margin, height-margin)
 
+	// グリッド線
+	gridColor := color.RGBA{210, 210, 240, 255}
+	nYTicks := 5
+	nXTicks := 6
+	for i := 0; i <= nYTicks; i++ {
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*float64(i)/float64(nYTicks))
+		for x := plotRect.Min.X; x <= plotRect.Max.X; x++ {
+			img.Set(x, y, gridColor)
+		}
+	}
+	for i := 0; i <= nXTicks; i++ {
+		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(i)/float64(nXTicks))
+		for y := plotRect.Min.Y; y <= plotRect.Max.Y; y++ {
+			img.Set(x, y, gridColor)
+		}
+	}
+
 	// 軸描画
-	axisColor := color.RGBA{80, 80, 80, 255}
-	// X軸
+	axisColor := color.RGBA{60, 60, 60, 255}
 	for x := plotRect.Min.X; x <= plotRect.Max.X; x++ {
 		img.Set(x, plotRect.Max.Y, axisColor)
 	}
-	// Y軸
 	for y := plotRect.Min.Y; y <= plotRect.Max.Y; y++ {
 		img.Set(plotRect.Min.X, y, axisColor)
 	}
@@ -55,53 +75,58 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 		tMax = tMin.Add(time.Second)
 	}
 	pMax := 0.0
+	pMin := 0.0
 	for _, r := range history {
 		if r.Percentage > pMax {
 			pMax = r.Percentage
 		}
+		if r.Percentage < pMin {
+			pMin = r.Percentage
+		}
 	}
-	// 余白と目盛り最大
 	pMax = math.Max(pMax, 1.0)
 
-	// 軸目盛り（Y: 0, 中間, 最大）
-	tickColor := color.RGBA{120, 120, 120, 255}
-	yTicks := []float64{0, pMax / 2, pMax}
-	for _, tv := range yTicks {
-		y := plotRect.Max.Y - int(float64(plotRect.Dy())*(tv/pMax))
-		// 短い横線
-		for x := plotRect.Min.X - 6; x <= plotRect.Min.X; x++ {
-			img.Set(x, y, tickColor)
-		}
-		// ラベル
-		drawText5x7(img, plotRect.Min.X-35, y-4, fmt.Sprintf("%.0f%%", tv), color.RGBA{60, 60, 60, 255})
+	// Y軸目盛り
+	tickColor := color.RGBA{100, 100, 120, 255}
+	for i := 0; i <= nYTicks; i++ {
+		v := pMin + (pMax-pMin)*float64(i)/float64(nYTicks)
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*float64(i)/float64(nYTicks))
+		// 目盛りラベル
+		drawText5x7(img, plotRect.Min.X-44, y-4, fmt.Sprintf("%.1f%%", v), tickColor)
 	}
 
-	// X軸ラベル（開始/終了時刻）
-	tMinStr := history[0].Timestamp.Format("15:04")
-	tMaxStr := history[len(history)-1].Timestamp.Format("15:04")
-	drawText5x7(img, plotRect.Min.X, plotRect.Max.Y+8, tMinStr, color.RGBA{60, 60, 60, 255})
-	drawText5x7(img, plotRect.Max.X-28, plotRect.Max.Y+8, tMaxStr, color.RGBA{60, 60, 60, 255})
+	// X軸目盛り
+	for i := 0; i <= nXTicks; i++ {
+		t := tMin.Add(time.Duration(float64(tMax.Sub(tMin)) * float64(i) / float64(nXTicks)))
+		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(i)/float64(nXTicks))
+		drawText5x7(img, x-16, plotRect.Max.Y+10, t.Format("15:04"), tickColor)
+	}
 
-	// 線色
-	lineColor := color.RGBA{99, 164, 255, 255}
+	// 軸ラベル
+	drawText5x7(img, plotRect.Min.X+(plotRect.Dx()/2)-40, plotRect.Max.Y+32, "時刻", color.RGBA{40, 40, 80, 255})
+	// 縦軸ラベル（縦書き風）
+	yLabel := "差分率(%)"
+	for i := 0; i < len(yLabel); i++ {
+		drawText5x7(img, plotRect.Min.X-60, plotRect.Min.Y+20+i*10, string(yLabel[i]), color.RGBA{40, 40, 80, 255})
+	}
 
-	// 折れ線
+	// 線色・太さ
+	lineColor := color.RGBA{40, 120, 255, 255}
+	pointColor := color.RGBA{0, 0, 0, 255}
 	prevX, prevY := 0, 0
 	for i, r := range history {
-		// x: 時刻を線形
 		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(r.Timestamp.Sub(tMin))/float64(tMax.Sub(tMin)))
-		// y: 0..pMax を逆向きで
-		y := plotRect.Max.Y - int(float64(plotRect.Dy())*(r.Percentage/pMax))
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*((r.Percentage-pMin)/(pMax-pMin)))
 
-		// 点
-		img.Set(x, y, lineColor)
-		img.Set(x, y-1, lineColor)
-		img.Set(x, y+1, lineColor)
-		img.Set(x-1, y, lineColor)
-		img.Set(x+1, y, lineColor)
+		// 太めの点
+		for dx := -1; dx <= 1; dx++ {
+			for dy := -1; dy <= 1; dy++ {
+				img.Set(x+dx, y+dy, pointColor)
+			}
+		}
 
 		if i > 0 {
-			// 前の点から線を引く（簡易Bresenham風）
+			// 前の点から線を引く（太線）
 			dx := x - prevX
 			dy := y - prevY
 			steps := int(math.Max(math.Abs(float64(dx)), math.Abs(float64(dy))))
@@ -111,7 +136,11 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 			for s := 0; s <= steps; s++ {
 				xi := prevX + int(float64(dx)*float64(s)/float64(steps))
 				yi := prevY + int(float64(dy)*float64(s)/float64(steps))
-				img.Set(xi, yi, lineColor)
+				for wx := -1; wx <= 1; wx++ {
+					for wy := -1; wy <= 1; wy++ {
+						img.Set(xi+wx, yi+wy, lineColor)
+					}
+				}
 			}
 		}
 		prevX, prevY = x, y

@@ -73,9 +73,15 @@ Koukyo_discord_bot/
   - ハイフン形式での座標変換
 
 ### 可視化・分析系
-- `!graph` / `/graph` - 差分率の履歴グラフPNG生成
+- `!graph [duration=1h|6h|24h|...]` / `/graph duration:1h` - 差分率の履歴グラフPNG生成（期間指定可）
 - `!timelapse` / `/timelapse` - 30%→0.2%のタイムラプスGIF生成
 - `!heatmap` / `/heatmap` - 変化量ヒートマップPNG生成
+
+#### グラフコマンド例
+```
+!graph duration=6h
+/graph duration:24h
+```
 
 ## 🌐 WebSocket監視機能
 
@@ -151,6 +157,8 @@ result, err := limiter.Do(ctx, "example.com", func() (interface{}, error) {
 ```bash
 go build -o bot.exe ./cmd/bot
 ```
+
+※ただしDockerの利用を推奨。
 
 ### 依存関係の追加
 ```bash

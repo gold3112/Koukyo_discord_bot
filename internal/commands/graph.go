@@ -21,7 +21,7 @@ func NewGraphCommand(mon *monitor.Monitor) *GraphCommand {
 
 func (c *GraphCommand) Name() string { return "graph" }
 func (c *GraphCommand) Description() string {
-	return "差分率の時系列グラフを表示します"
+	return "差分率の時系列グラフを表示します（オプションで期間指定可）"
 }
 
 func (c *GraphCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
