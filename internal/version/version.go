@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "1.3.1-beta"
+	Version = "1.4.0-beta"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
@@ -10,6 +10,5 @@ const (
 
 // PatchNotes パッチノートの内容
 var PatchNotes = []string{
-	"荒らし・修復アクティビティ追跡機能を作成中",
 	"--現在移植中!!!--",
 }

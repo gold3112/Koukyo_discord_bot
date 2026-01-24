@@ -158,6 +158,132 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
+// BuildDailyCountGraphPNG 日次件数の折れ線グラフPNGを生成
+func BuildDailyCountGraphPNG(labels []string, counts []int) (*bytes.Buffer, error) {
+	const width = 800
+	const height = 400
+	const margin = 56
+
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	for y := 0; y < height; y++ {
+		c := uint8(245 - y*15/height)
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{c, c, 255, 255})
+		}
+	}
+
+	plotRect := image.Rect(margin, margin, width-margin, height-margin)
+
+	gridColor := color.RGBA{210, 210, 240, 255}
+	nYTicks := 5
+	nXTicks := 6
+	for i := 0; i <= nYTicks; i++ {
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*float64(i)/float64(nYTicks))
+		for x := plotRect.Min.X; x <= plotRect.Max.X; x++ {
+			img.Set(x, y, gridColor)
+		}
+	}
+	for i := 0; i <= nXTicks; i++ {
+		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(i)/float64(nXTicks))
+		for y := plotRect.Min.Y; y <= plotRect.Max.Y; y++ {
+			img.Set(x, y, gridColor)
+		}
+	}
+
+	axisColor := color.RGBA{60, 60, 60, 255}
+	for x := plotRect.Min.X; x <= plotRect.Max.X; x++ {
+		img.Set(x, plotRect.Max.Y, axisColor)
+	}
+	for y := plotRect.Min.Y; y <= plotRect.Max.Y; y++ {
+		img.Set(plotRect.Min.X, y, axisColor)
+	}
+
+	if len(labels) == 0 || len(counts) == 0 {
+		buf := &bytes.Buffer{}
+		if err := png.Encode(buf, img); err != nil {
+			return nil, err
+		}
+		return buf, nil
+	}
+
+	maxCount := 0
+	for _, v := range counts {
+		if v > maxCount {
+			maxCount = v
+		}
+	}
+	if maxCount < 1 {
+		maxCount = 1
+	}
+
+	tickColor := color.RGBA{100, 100, 120, 255}
+	for i := 0; i <= nYTicks; i++ {
+		v := int(float64(maxCount) * float64(i) / float64(nYTicks))
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*float64(i)/float64(nYTicks))
+		drawText(img, plotRect.Min.X-40, y-6, fmt.Sprintf("%d", v), tickColor)
+	}
+
+	step := 1
+	if len(labels) > nXTicks+1 {
+		step = int(math.Ceil(float64(len(labels)) / float64(nXTicks+1)))
+	}
+	for i := 0; i < len(labels); i += step {
+		x := xFromIndex(plotRect, i, len(labels))
+		drawText(img, x-16, plotRect.Max.Y+12, labels[i], tickColor)
+	}
+
+	drawText(img, plotRect.Min.X+(plotRect.Dx()/2)-22, plotRect.Max.Y+34, "Date", color.RGBA{40, 40, 80, 255})
+	yLabel := "Count"
+	for i := 0; i < len(yLabel); i++ {
+		drawText(img, plotRect.Min.X-58, plotRect.Min.Y+18+i*14, string(yLabel[i]), color.RGBA{40, 40, 80, 255})
+	}
+
+	lineColor := color.RGBA{231, 76, 60, 255}
+	pointColor := color.RGBA{0, 0, 0, 255}
+	prevX, prevY := 0, 0
+	for i, v := range counts {
+		x := xFromIndex(plotRect, i, len(counts))
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*float64(v)/float64(maxCount))
+		for dx := -1; dx <= 1; dx++ {
+			for dy := -1; dy <= 1; dy++ {
+				img.Set(x+dx, y+dy, pointColor)
+			}
+		}
+		if i > 0 {
+			dx := x - prevX
+			dy := y - prevY
+			steps := int(math.Max(math.Abs(float64(dx)), math.Abs(float64(dy))))
+			if steps == 0 {
+				steps = 1
+			}
+			for s := 0; s <= steps; s++ {
+				xi := prevX + int(float64(dx)*float64(s)/float64(steps))
+				yi := prevY + int(float64(dy)*float64(s)/float64(steps))
+				for wx := -1; wx <= 1; wx++ {
+					for wy := -1; wy <= 1; wy++ {
+						img.Set(xi+wx, yi+wy, lineColor)
+					}
+				}
+			}
+		}
+		prevX, prevY = x, y
+	}
+
+	buf := &bytes.Buffer{}
+	if err := png.Encode(buf, img); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+func xFromIndex(rect image.Rectangle, index, total int) int {
+	if total <= 1 {
+		return rect.Min.X + rect.Dx()/2
+	}
+	return rect.Min.X + int(float64(rect.Dx())*float64(index)/float64(total-1))
+}
+
 func drawText(img *image.RGBA, x, y int, s string, c color.RGBA) {
 	d := &font.Drawer{
 		Dst:  img,
