@@ -524,7 +524,7 @@ func getTierColor(tier Tier) int {
 // StartMonitoring 全サーバーの監視を開始
 func (n *Notifier) StartMonitoring() {
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
