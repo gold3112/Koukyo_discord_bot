@@ -94,32 +94,11 @@ func (h *Handler) SendStartupNotification(s *discordgo.Session) {
 		guildID := guild.ID
 		settings := h.settings.GetGuildSettings(guildID)
 
-		// 通知チャンネルが設定されている場合、そこに送信
-		var channelID string
-		if settings.NotificationChannel != nil {
-			channelID = *settings.NotificationChannel
-		} else {
-			// 通知チャンネルが設定されていない場合は、最初のテキストチャンネルに送信
-			channels, err := s.GuildChannels(guildID)
-			if err != nil {
-				log.Printf("Error fetching guild channels for %s: %v", guildID, err)
-				continue
-			}
-
-			found := false
-			for _, ch := range channels {
-				if ch.Type == discordgo.ChannelTypeGuildText {
-					channelID = ch.ID
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				log.Printf("No text channel found for guild %s", guildID)
-				continue
-			}
+		// 通知チャンネルが設定されていない場合は送信しない
+		if settings.NotificationChannel == nil {
+			continue
 		}
+		channelID := *settings.NotificationChannel
 
 		// Bot起動通知を送信
 		startupEmbed := embeds.BuildBotStartupEmbed(h.botInfo)
