@@ -48,6 +48,8 @@ func main() {
 	// レートリミッターの初期化
 	limiter := utils.NewRateLimiter(3)
 	defer limiter.Close()
+	activityLimiter := utils.NewRateLimiter(1)
+	defer activityLimiter.Close()
 
 	// ユーザー活動トラッカーの初期化
 	activityTracker := activity.NewTracker(activity.Config{
@@ -57,7 +59,7 @@ func main() {
 		TopLeftPixelY: 358,
 		Width:         107,
 		Height:        142,
-	}, limiter, dataDir)
+	}, activityLimiter, dataDir)
 	activityTracker.Start()
 	defer activityTracker.Stop()
 

@@ -70,19 +70,21 @@ type VandalState struct {
 }
 
 type Tracker struct {
-	cfg         Config
-	limiter     *utils.RateLimiter
-	dataDir     string
-	httpClient  *http.Client
-	newUserCB   NewUserCallback
-	queue       chan Pixel
-	diffQueue   chan []byte
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex
-	currentDiff map[string]Pixel
-	activity    map[string]*UserActivity
-	vandalState VandalState
+	cfg          Config
+	limiter      *utils.RateLimiter
+	dataDir      string
+	httpClient   *http.Client
+	newUserCB    NewUserCallback
+	queue        chan Pixel
+	diffQueue    chan []byte
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.Mutex
+	currentDiff  map[string]Pixel
+	activity     map[string]*UserActivity
+	vandalState  VandalState
+	backoffDelay time.Duration
+	backoffUntil time.Time
 }
 
 type NewUserCallback func(kind string, user UserActivity)
@@ -108,17 +110,18 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 		TLSNextProto:       make(map[string]func(string, *tls.Conn) http.RoundTripper),
 	}
 	t := &Tracker{
-		cfg:         cfg,
-		limiter:     limiter,
-		dataDir:     dataDir,
-		httpClient:  &http.Client{Transport: transport, Timeout: 8 * time.Second},
-		queue:       make(chan Pixel, queueSize),
-		diffQueue:   make(chan []byte, diffQueueSize),
-		ctx:         ctx,
-		cancel:      cancel,
-		currentDiff: make(map[string]Pixel),
-		activity:    make(map[string]*UserActivity),
-		vandalState: VandalState{PixelToPainter: make(map[string]string)},
+		cfg:          cfg,
+		limiter:      limiter,
+		dataDir:      dataDir,
+		httpClient:   &http.Client{Transport: transport, Timeout: 8 * time.Second},
+		queue:        make(chan Pixel, queueSize),
+		diffQueue:    make(chan []byte, diffQueueSize),
+		ctx:          ctx,
+		cancel:       cancel,
+		currentDiff:  make(map[string]Pixel),
+		activity:     make(map[string]*UserActivity),
+		vandalState:  VandalState{PixelToPainter: make(map[string]string)},
+		backoffDelay: 2 * time.Second,
 	}
 	t.loadState()
 	return t
@@ -331,6 +334,9 @@ func (t *Tracker) processPixel(px Pixel) {
 }
 
 func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {
+	if err := t.waitForBackoff(); err != nil {
+		return nil, err
+	}
 	tileX := px.AbsX / utils.WplaceTileSize
 	tileY := px.AbsY / utils.WplaceTileSize
 	pixelX := px.AbsX % utils.WplaceTileSize
@@ -361,8 +367,12 @@ func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := readResponseBody(resp)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				t.markBackoff()
+			}
 			return nil, fmt.Errorf("pixel api status: %s body=%s", resp.Status, string(body))
 		}
+		t.resetBackoff()
 		return readResponseBody(resp)
 	})
 	if err != nil {
@@ -377,6 +387,45 @@ func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {
 		return nil, nil
 	}
 	return parsed.PaintedBy, nil
+}
+
+func (t *Tracker) waitForBackoff() error {
+	t.mu.Lock()
+	until := t.backoffUntil
+	t.mu.Unlock()
+	if until.IsZero() {
+		return nil
+	}
+	delay := time.Until(until)
+	if delay <= 0 {
+		return nil
+	}
+	select {
+	case <-t.ctx.Done():
+		return t.ctx.Err()
+	case <-time.After(delay):
+		return nil
+	}
+}
+
+func (t *Tracker) markBackoff() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.backoffDelay <= 0 {
+		t.backoffDelay = 2 * time.Second
+	}
+	if t.backoffDelay > 30*time.Second {
+		t.backoffDelay = 30 * time.Second
+	}
+	t.backoffUntil = time.Now().Add(t.backoffDelay)
+	t.backoffDelay *= 2
+}
+
+func (t *Tracker) resetBackoff() {
+	t.mu.Lock()
+	t.backoffDelay = 2 * time.Second
+	t.backoffUntil = time.Time{}
+	t.mu.Unlock()
 }
 
 func readResponseBody(resp *http.Response) ([]byte, error) {

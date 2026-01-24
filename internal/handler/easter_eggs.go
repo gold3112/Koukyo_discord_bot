@@ -12,7 +12,7 @@ import (
 )
 
 func (h *Handler) handleEasterEgg(s *discordgo.Session, m *discordgo.MessageCreate, cmdName string) bool {
-	if reply, ok := eastereggs.HandleEndless(cmdName); ok {
+	if reply, ok := eastereggs.RandomReply(cmdName); ok {
 		if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
 			log.Printf("Failed to send easter egg response: %v", err)
 		}

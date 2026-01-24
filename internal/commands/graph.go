@@ -32,8 +32,11 @@ func (c *GraphCommand) Description() string {
 
 // executeDiff は、差分率グラフ生成の共通ロジック
 func (c *GraphCommand) executeDiff(metric string, duration time.Duration) (*discordgo.MessageEmbed, *bytes.Buffer, error) {
-	if c.mon == nil || !c.mon.State.HasData() {
-		return nil, nil, fmt.Errorf("まだ監視データがありません。")
+	if c.mon == nil {
+		return nil, nil, fmt.Errorf("graphでエラーが発生しました: 監視システムが初期化されていません。")
+	}
+	if !c.mon.State.HasData() {
+		return nil, nil, fmt.Errorf("graphでエラーが発生しました: 監視データがまだ受信できていません。")
 	}
 
 	weighted := (metric == "weighted")
@@ -61,7 +64,7 @@ func (c *GraphCommand) executeDiff(metric string, duration time.Duration) (*disc
 // executeVandal は、日次荒らし件数グラフ生成の共通ロジック
 func (c *GraphCommand) executeVandal(duration time.Duration) (*discordgo.MessageEmbed, *bytes.Buffer, error) {
 	if c.dataDir == "" {
-		return nil, nil, fmt.Errorf("dataDirが未設定です。")
+		return nil, nil, fmt.Errorf("graphでエラーが発生しました: dataDirが未設定です。")
 	}
 	days := int(duration.Hours()/24 + 0.5)
 	if days < 1 {
@@ -72,7 +75,7 @@ func (c *GraphCommand) executeVandal(duration time.Duration) (*discordgo.Message
 	}
 	labels, counts, err := buildDailyVandalCounts(c.dataDir, days)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("graphでエラーが発生しました: %w", err)
 	}
 	pngBuf, err := embeds.BuildDailyCountGraphPNG(labels, counts)
 	if err != nil {

@@ -25,8 +25,16 @@ func (c *NowCommand) Description() string {
 }
 
 func (c *NowCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
+	if c.monitor == nil {
+		_, err := s.ChannelMessageSend(m.ChannelID, "❌ nowでエラーが発生しました: 監視システムが初期化されていません。")
+		return err
+	}
+	if !c.monitor.State.HasData() {
+		_, err := s.ChannelMessageSend(m.ChannelID, "❌ nowでエラーが発生しました: 監視データがまだ受信できていません。")
+		return err
+	}
 	embed := embeds.BuildNowEmbed(c.monitor)
-	
+
 	// 画像データを取得
 	images := c.monitor.GetLatestImages()
 	if images != nil && len(images.LiveImage) > 0 && len(images.DiffImage) > 0 {
@@ -38,12 +46,12 @@ func (c *NowCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreat
 			_, err = s.ChannelMessageSendEmbed(m.ChannelID, embed)
 			return err
 		}
-		
+
 		// 画像付きで送信
 		embed.Image = &discordgo.MessageEmbedImage{
 			URL: "attachment://koukyo_combined.png",
 		}
-		
+
 		_, err = s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
 			Embeds: []*discordgo.MessageEmbed{embed},
 			Files: []*discordgo.File{
@@ -55,7 +63,7 @@ func (c *NowCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreat
 		})
 		return err
 	}
-	
+
 	// 画像がない場合は通常のEmbedのみ
 	_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
 	return err
@@ -63,7 +71,25 @@ func (c *NowCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreat
 
 func (c *NowCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	log.Println("ExecuteSlash: /now command called")
-	
+	if c.monitor == nil {
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ nowでエラーが発生しました: 監視システムが初期化されていません。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+	}
+	if !c.monitor.State.HasData() {
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ nowでエラーが発生しました: 監視データがまだ受信できていません。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+	}
+
 	// まず即座にDeferredで応答（3秒制限回避）
 	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -92,12 +118,12 @@ func (c *NowCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 			})
 			return err
 		}
-		
+
 		// 画像付きで送信
 		embed.Image = &discordgo.MessageEmbedImage{
 			URL: "attachment://koukyo_combined.png",
 		}
-		
+
 		log.Println("Sending follow-up message with image...")
 		_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 			Embeds: &[]*discordgo.MessageEmbed{embed},
