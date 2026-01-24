@@ -2,9 +2,18 @@ package monitor
 
 import (
 	"bytes"
+	"container/ring"
 	"image/png"
+	"sort"
 	"sync"
 	"time"
+)
+
+const (
+	// historyLimit 保持する差分履歴の最大数
+	historyLimit = 20000
+	// timelapseFrameLimit タイムラプスで保持するフレームの最大数
+	timelapseFrameLimit = 512
 )
 
 // MonitorData WebSocketから受信する監視データ
@@ -34,15 +43,15 @@ type ImageData struct {
 type MonitorState struct {
 	LatestData          *MonitorData
 	LatestImages        *ImageData
-	DiffHistory         []DiffRecord
-	WeightedDiffHistory []DiffRecord
+	DiffHistory         *ring.Ring
+	WeightedDiffHistory *ring.Ring
 	ReferencePixels     ReferencePixels
 	PowerSaveMode       bool
 	PowerSaveRestart    bool
 	ZeroDiffStartTime   *time.Time
 	// Timelapse recording
 	TimelapseActive      bool
-	TimelapseFrames      []TimelapseFrame
+	TimelapseFrames      *ring.Ring
 	LastTimelapseFrames  []TimelapseFrame
 	TimelapseStartTime   *time.Time
 	TimelapseCompletedAt *time.Time
@@ -78,8 +87,8 @@ type ReferencePixels struct {
 // NewMonitorState 新しい監視状態を作成
 func NewMonitorState() *MonitorState {
 	return &MonitorState{
-		DiffHistory:         make([]DiffRecord, 0),
-		WeightedDiffHistory: make([]DiffRecord, 0),
+		DiffHistory:         ring.New(historyLimit),
+		WeightedDiffHistory: ring.New(historyLimit),
 		PowerSaveMode:       false,
 	}
 }
@@ -105,27 +114,18 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 
 	// 差分履歴の追加
 	if !ms.PowerSaveMode {
-		record := DiffRecord{
+		ms.DiffHistory.Value = DiffRecord{
 			Timestamp:  data.Timestamp,
 			Percentage: data.DiffPercentage,
 		}
-		ms.DiffHistory = append(ms.DiffHistory, record)
+		ms.DiffHistory = ms.DiffHistory.Next()
 
-		// 加重差分履歴
 		if data.WeightedDiffPercentage != nil {
-			weightedRecord := DiffRecord{
+			ms.WeightedDiffHistory.Value = DiffRecord{
 				Timestamp:  data.Timestamp,
 				Percentage: *data.WeightedDiffPercentage,
 			}
-			ms.WeightedDiffHistory = append(ms.WeightedDiffHistory, weightedRecord)
-		}
-
-		// メモリ管理: 最新20000件のみ保持
-		if len(ms.DiffHistory) > 20000 {
-			ms.DiffHistory = ms.DiffHistory[len(ms.DiffHistory)-20000:]
-		}
-		if len(ms.WeightedDiffHistory) > 20000 {
-			ms.WeightedDiffHistory = ms.WeightedDiffHistory[len(ms.WeightedDiffHistory)-20000:]
+			ms.WeightedDiffHistory = ms.WeightedDiffHistory.Next()
 		}
 	}
 
@@ -137,33 +137,30 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 		} else {
 			elapsed := time.Since(*ms.ZeroDiffStartTime)
 			if elapsed >= 15*time.Minute && !ms.PowerSaveMode {
-				// 15分間ゼロなら省電力モードで再起動シグナル
 				ms.PowerSaveRestart = true
 			} else if elapsed >= 10*time.Minute && !ms.PowerSaveMode {
-				// 10分間ゼロなら省電力モードへ
 				ms.PowerSaveMode = true
 			}
 		}
 	} else {
-		// 差分が検出されたら省電力モード解除
 		if ms.PowerSaveMode {
 			ms.PowerSaveMode = false
 		}
 		ms.ZeroDiffStartTime = nil
 	}
 
-	// タイムラプスの開始/終了判定（閾値: 開始>=30%, 終了<=0.2%）
+	// タイムラプスの開始/終了判定
 	if !ms.TimelapseActive && data.DiffPercentage >= 30.0 {
 		now := time.Now()
 		ms.TimelapseActive = true
-		ms.TimelapseFrames = make([]TimelapseFrame, 0, 256)
+		ms.TimelapseFrames = ring.New(timelapseFrameLimit)
 		ms.TimelapseStartTime = &now
 		ms.TimelapseCompletedAt = nil
 		ms.lastTimelapseCapture = nil
 	}
 	if ms.TimelapseActive && data.DiffPercentage <= 0.2 {
 		ms.TimelapseActive = false
-		ms.LastTimelapseFrames = ms.TimelapseFrames
+		ms.LastTimelapseFrames = ms.collectTimelapseFrames()
 		now := time.Now()
 		ms.TimelapseCompletedAt = &now
 		ms.TimelapseFrames = nil
@@ -175,85 +172,84 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 // UpdateImages 画像データを更新
 func (ms *MonitorState) UpdateImages(images *ImageData) {
 	ms.mu.Lock()
-	defer ms.mu.Unlock()
 	ms.LatestImages = images
 
 	// タイムラプス中で、diff画像があり、一定間隔ごとにフレームを追加
 	if ms.TimelapseActive && images != nil && len(images.DiffImage) > 0 {
 		now := time.Now()
 		if ms.lastTimelapseCapture == nil || now.Sub(*ms.lastTimelapseCapture) >= 10*time.Second {
-			// PNGバイト列をコピーして保持
 			diffCopy := append([]byte(nil), images.DiffImage...)
-			ms.TimelapseFrames = append(ms.TimelapseFrames, TimelapseFrame{
+			ms.TimelapseFrames.Value = TimelapseFrame{
 				Timestamp: now,
 				DiffPNG:   diffCopy,
-			})
+			}
+			ms.TimelapseFrames = ms.TimelapseFrames.Next()
 			ms.lastTimelapseCapture = &now
 		}
 	}
+	ms.mu.Unlock()
 
-	// 省電力モード中は画像更新・ヒートマップ集計をスキップ
-	if ms.PowerSaveMode {
+	// 省電力モードチェック
+	ms.mu.RLock()
+	isPowerSave := ms.PowerSaveMode
+	ms.mu.RUnlock()
+	if isPowerSave {
 		return
 	}
 
-	// Heatmap集計（常時）: diff PNGをデコードし、非透過ピクセルをカウント
+	// Heatmap集計を非同期で実行
 	if images != nil && len(images.DiffImage) > 0 {
-		img, err := png.Decode(bytes.NewReader(images.DiffImage))
-		if err == nil {
-			b := img.Bounds()
-			w := b.Dx()
-			h := b.Dy()
-			if ms.HeatmapGridW == 0 || ms.HeatmapGridH == 0 {
-				// 初期化（画像サイズと同じグリッド）
-				ms.HeatmapGridW = w
-				ms.HeatmapGridH = h
-				ms.HeatmapCounts = make([]uint32, ms.HeatmapGridW*ms.HeatmapGridH)
-				ms.HeatmapSourceW = w
-				ms.HeatmapSourceH = h
-			}
-			// 画像サイズが変わる場合はリセット
-			if w != ms.HeatmapSourceW || h != ms.HeatmapSourceH {
-				ms.HeatmapGridW = w
-				ms.HeatmapGridH = h
-				ms.HeatmapCounts = make([]uint32, ms.HeatmapGridW*ms.HeatmapGridH)
-				ms.HeatmapSourceW = w
-				ms.HeatmapSourceH = h
-			}
-			// スキャン（ステップ間引きで負荷軽減）
-			stepX := int(float64(w) / 1000.0)
-			if stepX < 1 {
-				stepX = 1
-			}
-			stepY := int(float64(h) / 1000.0)
-			if stepY < 1 {
-				stepY = 1
-			}
-			for y := b.Min.Y; y < b.Max.Y; y += stepY {
-				for x := b.Min.X; x < b.Max.X; x += stepX {
-					_, _, _, a := img.At(x, y).RGBA()
-					if a > 0 { // 非透過=変化ありとみなす
-						gx := int(float64(x) * float64(ms.HeatmapGridW) / float64(w))
-						gy := int(float64(y) * float64(ms.HeatmapGridH) / float64(h))
-						if gx < 0 {
-							gx = 0
-						}
-						if gy < 0 {
-							gy = 0
-						}
-						if gx >= ms.HeatmapGridW {
-							gx = ms.HeatmapGridW - 1
-						}
-						if gy >= ms.HeatmapGridH {
-							gy = ms.HeatmapGridH - 1
-						}
-						ms.HeatmapCounts[gy*ms.HeatmapGridW+gx]++
-					}
+		diffImageCopy := make([]byte, len(images.DiffImage))
+		copy(diffImageCopy, images.DiffImage)
+		go ms.updateHeatmapAsync(diffImageCopy)
+	}
+}
+
+// updateHeatmapAsync はヒートマップ集計を非同期で行う
+func (ms *MonitorState) updateHeatmapAsync(diffImage []byte) {
+	img, err := png.Decode(bytes.NewReader(diffImage))
+	if err != nil {
+		// 必要であればログ出力
+		// log.Printf("failed to decode diff image for heatmap: %v", err)
+		return
+	}
+
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if ms.HeatmapGridW == 0 || ms.HeatmapGridW*ms.HeatmapGridH == 0 || w != ms.HeatmapSourceW || h != ms.HeatmapSourceH {
+		ms.HeatmapGridW = w
+		ms.HeatmapGridH = h
+		ms.HeatmapCounts = make([]uint32, w*h)
+		ms.HeatmapSourceW = w
+		ms.HeatmapSourceH = h
+	}
+
+	stepX := int(float64(w) / 1000.0)
+	if stepX < 1 {
+		stepX = 1
+	}
+	stepY := int(float64(h) / 1000.0)
+	if stepY < 1 {
+		stepY = 1
+	}
+	for y := b.Min.Y; y < b.Max.Y; y += stepY {
+		for x := b.Min.X; x < b.Max.X; x += stepX {
+			_, _, _, a := img.At(x, y).RGBA()
+			if a > 0 {
+				gx := int(float64(x) * float64(ms.HeatmapGridW) / float64(w))
+				gy := int(float64(y) * float64(ms.HeatmapGridH) / float64(h))
+				if gx >= 0 && gx < ms.HeatmapGridW && gy >= 0 && gy < ms.HeatmapGridH {
+					ms.HeatmapCounts[gy*ms.HeatmapGridW+gx]++
 				}
 			}
 		}
 	}
 }
+
 
 // GetLatestDiffPercentage 最新の差分率を取得
 func (ms *MonitorState) GetLatestDiffPercentage() float64 {
@@ -276,12 +272,9 @@ func (ms *MonitorState) HasData() bool {
 func (ms *MonitorState) GetLatestData() *MonitorData {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-
 	if ms.LatestData == nil {
 		return nil
 	}
-
-	// コピーを返す
 	data := *ms.LatestData
 	return &data
 }
@@ -290,26 +283,52 @@ func (ms *MonitorState) GetLatestData() *MonitorData {
 func (ms *MonitorState) GetDiffHistory(duration time.Duration, weighted bool) []DiffRecord {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	var src []DiffRecord
+
+	var src *ring.Ring
 	if weighted {
 		src = ms.WeightedDiffHistory
 	} else {
 		src = ms.DiffHistory
 	}
-	if duration <= 0 {
-		// 全件コピー
-		out := make([]DiffRecord, len(src))
-		copy(out, src)
-		return out
-	}
+
+	out := make([]DiffRecord, 0, src.Len())
 	cutoff := time.Now().Add(-duration)
-	// 遅延走査でフィルタ
-	out := make([]DiffRecord, 0, len(src))
-	for _, r := range src {
-		if r.Timestamp.After(cutoff) || r.Timestamp.Equal(cutoff) {
+
+	src.Do(func(p interface{}) {
+		if p == nil {
+			return
+		}
+		r := p.(DiffRecord)
+		if duration <= 0 || r.Timestamp.IsZero() || r.Timestamp.After(cutoff) || r.Timestamp.Equal(cutoff) {
 			out = append(out, r)
 		}
+	})
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Timestamp.Before(out[j].Timestamp)
+	})
+
+	return out
+}
+
+func (ms *MonitorState) collectTimelapseFrames() []TimelapseFrame {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	if ms.TimelapseFrames == nil {
+		return nil
 	}
+	out := make([]TimelapseFrame, 0, ms.TimelapseFrames.Len())
+	ms.TimelapseFrames.Do(func(p interface{}) {
+		if p != nil {
+			frame := p.(TimelapseFrame)
+			if !frame.Timestamp.IsZero() {
+				out = append(out, frame)
+			}
+		}
+	})
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Timestamp.Before(out[j].Timestamp)
+	})
 	return out
 }
 

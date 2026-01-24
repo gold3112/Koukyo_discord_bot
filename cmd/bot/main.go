@@ -39,24 +39,23 @@ func main() {
 		settingsPath = "/app/data/settings.json"
 	}
 	settingsManager := config.NewSettingsManager(settingsPath)
+	defer settingsManager.Close() // ここを追加
 	log.Printf("Settings loaded from: %s", settingsPath)
 
 	// WebSocket監視の開始
-	var globalMonitor *monitor.Monitor
 	powerSaveMode := os.Getenv("POWER_SAVE_MODE") == "1"
 	if cfg.WebSocketURL != "" {
 		globalMonitor = monitor.NewMonitor(cfg.WebSocketURL)
+		if powerSaveMode {
+			log.Println("Power-save mode enabled: setting PowerSaveMode on monitor state")
+			globalMonitor.State.PowerSaveMode = true
+		}
+
 		if err := globalMonitor.Start(); err != nil {
 			log.Printf("Failed to start monitor: %v", err)
 			log.Println("Continuing without monitor...")
 		} else {
 			log.Printf("Monitor started: %s", cfg.WebSocketURL)
-			if powerSaveMode {
-				log.Println("Power-save mode enabled: clearing history and heatmap")
-				globalMonitor.State.PowerSaveMode = true
-				// 履歴とヒートマップをクリア
-				time.Sleep(100 * time.Millisecond) // 初期化待ち
-			}
 		}
 	} else {
 		log.Println("WEBSOCKET_URL not set, skipping monitor")
@@ -78,7 +77,7 @@ func main() {
 		log.Println("Notification system started")
 	}
 
-	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier)
+	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier) // settingsManager を渡す
 	dg.AddHandler(h.OnReady)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)

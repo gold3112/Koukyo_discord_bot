@@ -56,6 +56,19 @@ func (c *ConvertCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageC
 		return c.sendUsage(s, m.ChannelID)
 	}
 
+	// backend.wplace.liveのタイルURLからタイル座標抽出
+	if strings.Contains(args[0], "backend.wplace.live/files/s0/tiles/") {
+		url := args[0]
+		var tileX, tileY int
+		if n, _ := fmt.Sscanf(url, "https://backend.wplace.live/files/s0/tiles/%d/%d.png", &tileX, &tileY); n == 2 {
+			// ハイフン形式: tileX-tileY-499-499（中央付近）
+			embed := embeds.BuildConvertPixelEmbed(tileX, tileY, 499, 499)
+			_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
+			return err
+		}
+		return c.sendUsage(s, m.ChannelID)
+	}
+
 	// ハイフン形式の場合（例: 1818-806-989-358）
 	if strings.Contains(args[0], "-") {
 		parts := strings.Split(args[0], "-")

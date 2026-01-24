@@ -3,6 +3,7 @@ package commands
 import (
 	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/monitor"
+	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -24,12 +25,35 @@ func (c *GraphCommand) Description() string {
 	return "差分率の時系列グラフを表示します（オプションで期間指定可）"
 }
 
-func (c *GraphCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
+// execute は、グラフ生成の共通ロジック
+func (c *GraphCommand) execute(metric string, duration time.Duration) (*discordgo.MessageEmbed, *bytes.Buffer, error) {
 	if c.mon == nil || !c.mon.State.HasData() {
-		_, err := s.ChannelMessageSend(m.ChannelID, "まだ監視データがありません。")
-		return err
+		return nil, nil, fmt.Errorf("まだ監視データがありません。")
 	}
 
+	weighted := (metric == "weighted")
+	history := c.mon.State.GetDiffHistory(duration, weighted)
+	pngBuf, err := embeds.BuildDiffGraphPNG(history)
+	if err != nil {
+		return nil, nil, fmt.Errorf("グラフ生成に失敗しました: %w", err)
+	}
+
+	title := "差分率グラフ"
+	if weighted {
+		title = "加重差分率グラフ"
+	}
+	embed := &discordgo.MessageEmbed{
+		Title:       title,
+		Description: fmt.Sprintf("範囲: %s / データ点: %d", humanDuration(duration), len(history)),
+		Color:       0x63A4FF,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Image:       &discordgo.MessageEmbedImage{URL: "attachment://diff_graph.png"},
+	}
+
+	return embed, pngBuf, nil
+}
+
+func (c *GraphCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
 	metric := "overall"
 	duration := 1 * time.Hour
 
@@ -48,25 +72,10 @@ func (c *GraphCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCre
 		}
 	}
 
-	weighted := (metric == "weighted")
-	history := c.mon.State.GetDiffHistory(duration, weighted)
-	pngBuf, err := embeds.BuildDiffGraphPNG(history)
+	embed, pngBuf, err := c.execute(metric, duration)
 	if err != nil {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("グラフ生成に失敗しました: %v", err))
+		_, e := s.ChannelMessageSend(m.ChannelID, err.Error())
 		return e
-	}
-
-	// Embed
-	title := "差分率グラフ"
-	if weighted {
-		title = "加重差分率グラフ"
-	}
-	embed := &discordgo.MessageEmbed{
-		Title:       title,
-		Description: fmt.Sprintf("範囲: %s / データ点: %d", humanDuration(duration), len(history)),
-		Color:       0x63A4FF,
-		Timestamp:   time.Now().Format(time.RFC3339),
-		Image:       &discordgo.MessageEmbedImage{URL: "attachment://diff_graph.png"},
 	}
 
 	_, err = s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
@@ -81,17 +90,6 @@ func (c *GraphCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCre
 }
 
 func (c *GraphCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	if c.mon == nil || !c.mon.State.HasData() {
-		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "まだ監視データがありません。",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-	}
-
-	// オプション取得
 	metric := "overall"
 	duration := 1 * time.Hour
 	opts := i.ApplicationCommandData().Options
@@ -110,29 +108,15 @@ func (c *GraphCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interacti
 		}
 	}
 
-	weighted := (metric == "weighted")
-	history := c.mon.State.GetDiffHistory(duration, weighted)
-	pngBuf, err := embeds.BuildDiffGraphPNG(history)
+	embed, pngBuf, err := c.execute(metric, duration)
 	if err != nil {
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("グラフ生成に失敗しました: %v", err),
+				Content: err.Error(),
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
-	}
-
-	title := "差分率グラフ"
-	if weighted {
-		title = "加重差分率グラフ"
-	}
-	embed := &discordgo.MessageEmbed{
-		Title:       title,
-		Description: fmt.Sprintf("範囲: %s / データ点: %d", humanDuration(duration), len(history)),
-		Color:       0x63A4FF,
-		Timestamp:   time.Now().Format(time.RFC3339),
-		Image:       &discordgo.MessageEmbedImage{URL: "attachment://diff_graph.png"},
 	}
 
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

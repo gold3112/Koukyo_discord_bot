@@ -27,3 +27,5 @@ Thumbs.db
 
 # Dependency
 /go.sum
+data/*
+data/region_database.json

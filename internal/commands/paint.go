@@ -20,6 +20,11 @@ func (c *PaintCommand) Description() string {
 	return "Paint回復時間の計算・通知を行います (30秒/1回復)"
 }
 
+func (c *PaintCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
+	_, err := s.ChannelMessageSend(m.ChannelID, "このコマンドはスラッシュコマンドで利用してください。")
+	return err
+}
+
 func (c *PaintCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	var current, max int
 	notify := false

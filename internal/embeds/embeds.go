@@ -297,7 +297,7 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 		},
 		Timestamp: data.Timestamp.UTC().Format(time.RFC3339),
 		Footer: &discordgo.MessageEmbedFooter{
-			Text: fmt.Sprintf("最終更新 | データ件数: %d件", len(mon.State.DiffHistory)),
+			Text: fmt.Sprintf("最終更新 | データ件数: %d件", mon.State.DiffHistory.Len()),
 		},
 	}
 

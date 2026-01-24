@@ -260,14 +260,9 @@ func HandleSettingsButtonInteraction(
 
 // handleToggleNotify 自動通知ON/OFF切り替え
 func handleToggleNotify(s *discordgo.Session, i *discordgo.InteractionCreate, settings *config.SettingsManager, notifier *notifications.Notifier) {
-	err := settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
+	settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
 		gs.AutoNotifyEnabled = !gs.AutoNotifyEnabled
 	})
-
-	if err != nil {
-		log.Printf("Failed to update settings: %v", err)
-		return
-	}
 
 	// 通知状態をリセット
 	notifier.ResetState(i.GuildID)
@@ -287,18 +282,13 @@ func handleToggleNotify(s *discordgo.Session, i *discordgo.InteractionCreate, se
 
 // handleToggleMetric 通知指標切り替え
 func handleToggleMetric(s *discordgo.Session, i *discordgo.InteractionCreate, settings *config.SettingsManager, notifier *notifications.Notifier) {
-	err := settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
+	settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
 		if gs.NotificationMetric == "overall" {
 			gs.NotificationMetric = "weighted"
 		} else {
 			gs.NotificationMetric = "overall"
 		}
 	})
-
-	if err != nil {
-		log.Printf("Failed to update settings: %v", err)
-		return
-	}
 
 	// 通知状態をリセット
 	notifier.ResetState(i.GuildID)
@@ -407,14 +397,9 @@ func handleSetMentionThreshold(s *discordgo.Session, i *discordgo.InteractionCre
 func handleSetChannel(s *discordgo.Session, i *discordgo.InteractionCreate, settings *config.SettingsManager) {
 	channelID := i.ChannelID
 
-	err := settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
+	settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
 		gs.NotificationChannel = &channelID
 	})
-
-	if err != nil {
-		log.Printf("Failed to update settings: %v", err)
-		return
-	}
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,

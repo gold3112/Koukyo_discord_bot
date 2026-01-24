@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // GuildSettings サーバーごとの設定
@@ -29,76 +30,103 @@ var DefaultGuildSettings = GuildSettings{
 
 // SettingsManager 設定管理
 type SettingsManager struct {
-	mu       sync.RWMutex
-	Guilds   map[string]GuildSettings `json:"guilds"`
-	filePath string
+	filePath   string
+	settings   map[string]GuildSettings
+	mu         sync.RWMutex
+	dirty      bool
+	shutdownCh chan struct{}
 }
 
 // NewSettingsManager 設定マネージャーを作成
 func NewSettingsManager(configPath string) *SettingsManager {
 	sm := &SettingsManager{
-		Guilds:   make(map[string]GuildSettings),
-		filePath: configPath,
+		settings:   make(map[string]GuildSettings),
+		filePath:   configPath,
+		shutdownCh: make(chan struct{}),
 	}
-	sm.Load()
+	if err := sm.load(); err != nil {
+		// log.Printf("Failed to load settings, starting with default: %v", err)
+	}
+	go sm.periodicSaver(30 * time.Second)
 	return sm
 }
 
-// Load 設定をファイルから読み込む
-func (sm *SettingsManager) Load() error {
+// Close シャットダウン処理
+func (sm *SettingsManager) Close() {
+	close(sm.shutdownCh)
+}
+
+func (sm *SettingsManager) periodicSaver(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			sm.SaveIfDirty()
+		case <-sm.shutdownCh:
+			sm.SaveIfDirty()
+			return
+		}
+	}
+}
+
+// load 設定をファイルから読み込む（ロックは呼び出し元が管理）
+func (sm *SettingsManager) load() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if _, err := os.Stat(sm.filePath); os.IsNotExist(err) {
-		// ファイルが存在しない場合はデフォルト設定で保存
-		return sm.saveUnsafe()
+		return nil // 新規作成
 	}
 
 	data, err := os.ReadFile(sm.filePath)
 	if err != nil {
 		return err
 	}
-
-	type FileFormat struct {
-		Guilds map[string]GuildSettings `json:"guilds"`
+	if len(data) == 0 {
+		return nil // 空ファイル
 	}
 
-	var format FileFormat
-	if err := json.Unmarshal(data, &format); err != nil {
+	if err := json.Unmarshal(data, &sm.settings); err != nil {
 		return err
 	}
-
-	sm.Guilds = format.Guilds
-	if sm.Guilds == nil {
-		sm.Guilds = make(map[string]GuildSettings)
+	if sm.settings == nil {
+		sm.settings = make(map[string]GuildSettings)
 	}
-
 	return nil
 }
 
-// Save 設定をファイルに保存
-func (sm *SettingsManager) Save() error {
+// SaveIfDirty 変更があれば設定をファイルに保存
+func (sm *SettingsManager) SaveIfDirty() error {
+	sm.mu.RLock()
+	if !sm.dirty {
+		sm.mu.RUnlock()
+		return nil
+	}
+	sm.mu.RUnlock()
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	return sm.saveUnsafe()
+
+	// ダブルチェック
+	if !sm.dirty {
+		return nil
+	}
+
+	err := sm.saveUnsafe()
+	if err == nil {
+		sm.dirty = false
+	}
+	return err
 }
 
 func (sm *SettingsManager) saveUnsafe() error {
-	// ディレクトリを作成
 	dir := filepath.Dir(sm.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	type FileFormat struct {
-		Guilds map[string]GuildSettings `json:"guilds"`
-	}
-
-	format := FileFormat{
-		Guilds: sm.Guilds,
-	}
-
-	data, err := json.MarshalIndent(format, "", "  ")
+	data, err := json.MarshalIndent(sm.settings, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -111,7 +139,7 @@ func (sm *SettingsManager) GetGuildSettings(guildID string) GuildSettings {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	if settings, ok := sm.Guilds[guildID]; ok {
+	if settings, ok := sm.settings[guildID]; ok {
 		return settings
 	}
 
@@ -119,24 +147,22 @@ func (sm *SettingsManager) GetGuildSettings(guildID string) GuildSettings {
 }
 
 // SetGuildSettings サーバー設定を保存
-func (sm *SettingsManager) SetGuildSettings(guildID string, settings GuildSettings) error {
+func (sm *SettingsManager) SetGuildSettings(guildID string, settings GuildSettings) {
 	sm.mu.Lock()
-	sm.Guilds[guildID] = settings
-	sm.mu.Unlock()
-
-	return sm.Save()
+	defer sm.mu.Unlock()
+	sm.settings[guildID] = settings
+	sm.dirty = true
 }
 
 // UpdateGuildSetting 特定の設定項目を更新
-func (sm *SettingsManager) UpdateGuildSetting(guildID string, update func(*GuildSettings)) error {
+func (sm *SettingsManager) UpdateGuildSetting(guildID string, update func(*GuildSettings)) {
 	sm.mu.Lock()
-	settings := sm.Guilds[guildID]
-	if settings == (GuildSettings{}) {
+	defer sm.mu.Unlock()
+	settings, ok := sm.settings[guildID]
+	if !ok {
 		settings = DefaultGuildSettings
 	}
 	update(&settings)
-	sm.Guilds[guildID] = settings
-	sm.mu.Unlock()
-
-	return sm.Save()
+	sm.settings[guildID] = settings
+	sm.dirty = true
 }
