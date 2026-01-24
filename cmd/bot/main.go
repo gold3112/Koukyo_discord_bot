@@ -7,6 +7,7 @@ import (
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/notifications"
 	"Koukyo_discord_bot/internal/version"
+	"Koukyo_discord_bot/internal/utils"
 	"log"
 	"os"
 	"path/filepath"
@@ -41,6 +42,10 @@ func main() {
 	settingsManager := config.NewSettingsManager(settingsPath)
 	defer settingsManager.Close() // ここを追加
 	log.Printf("Settings loaded from: %s", settingsPath)
+
+    // レートリミッターの初期化
+    limiter := utils.NewRateLimiter(3)
+    defer limiter.Close()
 
 	// WebSocket監視の開始
 	powerSaveMode := os.Getenv("POWER_SAVE_MODE") == "1"
@@ -77,7 +82,7 @@ func main() {
 		log.Println("Notification system started")
 	}
 
-	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier) // settingsManager を渡す
+	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier, limiter) // settingsManager を渡す
 	dg.AddHandler(h.OnReady)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)

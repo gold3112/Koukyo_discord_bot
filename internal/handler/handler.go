@@ -7,6 +7,7 @@ import (
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/notifications"
+	"Koukyo_discord_bot/internal/utils" // これを追加
 	"fmt"
 	"log"
 	"reflect"
@@ -23,9 +24,10 @@ type Handler struct {
 	monitor  *monitor.Monitor
 	settings *config.SettingsManager
 	notifier *notifications.Notifier
+	limiter  *utils.RateLimiter // これを追加
 }
 
-func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier) *Handler {
+func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier, limiter *utils.RateLimiter) *Handler { // limiter 引数を追加
 	registry := commands.NewRegistry()
 
 	// すべてのコマンドを配列で一元管理
@@ -38,7 +40,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		commands.NewTimeCommand(),
 		commands.NewConvertCommand(),
 		commands.NewSettingsCommand(settingsManager, notifier), // settingsManager を渡す
-		commands.NewGetCommand(),
+		commands.NewGetCommand(limiter), // limiter を渡すように変更
 		commands.NewPaintCommand(),
 	)
 	if mon != nil {
@@ -64,6 +66,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		monitor:  mon,
 		settings: settingsManager, // settingsManager を使用
 		notifier: notifier,
+		limiter:  limiter, // これを追加
 	}
 }
 
