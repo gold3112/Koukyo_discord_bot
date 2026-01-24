@@ -64,7 +64,60 @@ func (c *TimeCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCrea
 }
 
 func (c *TimeCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	embed := embeds.BuildTimeEmbed()
+	from := ""
+	to := ""
+	timeStr := ""
+	dateStr := ""
+	for _, opt := range i.ApplicationCommandData().Options {
+		switch opt.Name {
+		case "from":
+			from = opt.StringValue()
+		case "to":
+			to = opt.StringValue()
+		case "time":
+			timeStr = opt.StringValue()
+		case "date":
+			dateStr = opt.StringValue()
+		}
+	}
+
+	if from == "" || to == "" {
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ from/toを指定してください (例: /time from:JST to:PST time:23:20)",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+	}
+
+	// 日付指定があれば timeStr に結合
+	if dateStr != "" {
+		if timeStr == "" {
+			timeStr = "00:00"
+		}
+		timeStr = dateStr + "T" + timeStr
+	}
+
+	result, err := utils.ConvertTime(from, to, timeStr)
+	if err != nil {
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ エラー: " + err.Error(),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+	}
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "🌍 時差変換",
+		Description: result,
+		Color:       0x3498DB,
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "時差変換システム",
+		},
+	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
@@ -77,6 +130,32 @@ func (c *TimeCommand) SlashDefinition() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        c.Name(),
 		Description: c.Description(),
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "from",
+				Description: "変換元タイムゾーン (例: JST, PST, UTC)",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "to",
+				Description: "変換先タイムゾーン (例: JST, PST, UTC)",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "time",
+				Description: "時刻 (例: 23:20 または 23:20:00)",
+				Required:    false,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "date",
+				Description: "日付 (例: 2026-01-24)",
+				Required:    false,
+			},
+		},
 	}
 }
 

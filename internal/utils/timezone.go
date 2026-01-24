@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -75,9 +76,8 @@ func FormatTimeInTimezone(t time.Time, loc *time.Location) string {
 // ConvertTime タイムゾーン間で時刻を変換
 // fromTz: 元のタイムゾーン (例: "JST", "PST")
 // toTz: 変換先タイムゾーン (例: "JST", "PST")
-// timeStr: 時刻文字列 (例: "23:20" または空文字列で現在時刻を使用)
+// timeStr: 時刻文字列 (例: "23:20" または "2026-01-24T23:20")
 func ConvertTime(fromTz, toTz, timeStr string) (string, error) {
-	// タイムゾーンを解析
 	fromLoc, err := ParseTimezone(fromTz)
 	if err != nil {
 		return "", fmt.Errorf("無効な元のタイムゾーン: %s", fromTz)
@@ -90,21 +90,30 @@ func ConvertTime(fromTz, toTz, timeStr string) (string, error) {
 
 	var sourceTime time.Time
 
-	// 時刻文字列がある場合、パースする
 	if timeStr != "" {
-		// "HH:MM" または "HH:MM:SS" 形式をサポート
-		now := time.Now()
-		parsed, err := time.Parse("15:04:05", timeStr+":00")
-		if err != nil {
-			// ":00" を追加してリトライ
-			parsed, err = time.Parse("15:04", timeStr)
+		// 日付＋時刻（例: 2026-01-24T23:20）
+		if strings.Contains(timeStr, "T") {
+			parsed, err := time.ParseInLocation("2006-01-02T15:04", timeStr, fromLoc)
 			if err != nil {
-				return "", fmt.Errorf("無効な時刻形式: %s (HH:MM または HH:MM:SS 形式で入力してください)", timeStr)
+				parsed, err = time.ParseInLocation("2006-01-02T15:04:05", timeStr, fromLoc)
+				if err != nil {
+					return "", fmt.Errorf("無効な日付・時刻形式: %s", timeStr)
+				}
 			}
+			sourceTime = parsed
+		} else {
+			// "HH:MM" または "HH:MM:SS"
+			now := time.Now().In(fromLoc)
+			parsed, err := time.Parse("15:04:05", timeStr+":00")
+			if err != nil {
+				parsed, err = time.Parse("15:04", timeStr)
+				if err != nil {
+					return "", fmt.Errorf("無効な時刻形式: %s (HH:MM または HH:MM:SS 形式で入力してください)", timeStr)
+				}
+			}
+			sourceTime = time.Date(now.Year(), now.Month(), now.Day(),
+				parsed.Hour(), parsed.Minute(), parsed.Second(), 0, fromLoc)
 		}
-		// 本日の日付で時刻を作成（元のタイムゾーンで）
-		sourceTime = time.Date(now.Year(), now.Month(), now.Day(),
-			parsed.Hour(), parsed.Minute(), parsed.Second(), 0, fromLoc)
 	} else {
 		// 時刻指定がない場合は現在時刻を使用
 		sourceTime = time.Now().In(fromLoc)
