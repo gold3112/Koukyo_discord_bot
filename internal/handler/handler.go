@@ -203,6 +203,9 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// コマンド実行
 	cmd, exists := h.registry.Get(cmdName)
 	if !exists {
+		if h.handleEasterEgg(s, m, cmdName) {
+			return
+		}
 		log.Printf("Command '%s' not found in registry", cmdName)
 		return
 	}

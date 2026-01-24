@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"sort"
+
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -51,8 +53,15 @@ func (c *HelpCommand) buildHelpEmbed() *discordgo.MessageEmbed {
 		Fields:      []*discordgo.MessageEmbedField{},
 	}
 
-	// コマンドを登録順に追加
+	// コマンドを名前順で追加
+	cmds := make([]Command, 0, len(c.registry.All()))
 	for _, cmd := range c.registry.All() {
+		cmds = append(cmds, cmd)
+	}
+	sort.Slice(cmds, func(i, j int) bool {
+		return cmds[i].Name() < cmds[j].Name()
+	})
+	for _, cmd := range cmds {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔹 " + cmd.Name(),
 			Value:  cmd.Description(),
