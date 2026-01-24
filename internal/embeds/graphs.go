@@ -9,6 +9,10 @@ import (
 	"image/png"
 	"math"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
 // BuildDiffGraphPNG 差分履歴から簡易折れ線グラフPNGを生成
@@ -92,22 +96,22 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 		v := pMin + (pMax-pMin)*float64(i)/float64(nYTicks)
 		y := plotRect.Max.Y - int(float64(plotRect.Dy())*float64(i)/float64(nYTicks))
 		// 目盛りラベル
-		drawText5x7(img, plotRect.Min.X-44, y-4, fmt.Sprintf("%.1f%%", v), tickColor)
+		drawText(img, plotRect.Min.X-48, y-6, fmt.Sprintf("%.1f%%", v), tickColor)
 	}
 
 	// X軸目盛り
 	for i := 0; i <= nXTicks; i++ {
 		t := tMin.Add(time.Duration(float64(tMax.Sub(tMin)) * float64(i) / float64(nXTicks)))
 		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(i)/float64(nXTicks))
-		drawText5x7(img, x-16, plotRect.Max.Y+10, t.Format("15:04"), tickColor)
+		drawText(img, x-18, plotRect.Max.Y+12, t.Format("15:04"), tickColor)
 	}
 
 	// 軸ラベル
-	drawText5x7(img, plotRect.Min.X+(plotRect.Dx()/2)-40, plotRect.Max.Y+32, "時刻", color.RGBA{40, 40, 80, 255})
-	// 縦軸ラベル（縦書き風）
-	yLabel := "差分率(%)"
+	drawText(img, plotRect.Min.X+(plotRect.Dx()/2)-18, plotRect.Max.Y+34, "Time", color.RGBA{40, 40, 80, 255})
+	// 縦軸ラベル（ASCIIのみで可読性優先）
+	yLabel := "Diff %"
 	for i := 0; i < len(yLabel); i++ {
-		drawText5x7(img, plotRect.Min.X-60, plotRect.Min.Y+20+i*10, string(yLabel[i]), color.RGBA{40, 40, 80, 255})
+		drawText(img, plotRect.Min.X-62, plotRect.Min.Y+18+i*14, string(yLabel[i]), color.RGBA{40, 40, 80, 255})
 	}
 
 	// 線色・太さ
@@ -154,57 +158,12 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-// 5x7の簡易フォントで数字や記号を描く（0-9, :, ., %, h, m を想定）
-func drawText5x7(img *image.RGBA, x, y int, s string, c color.RGBA) {
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		glyph := glyph5x7(ch)
-		// 描画
-		for gy := 0; gy < 7; gy++ {
-			row := glyph[gy]
-			for gx := 0; gx < 5; gx++ {
-				if (row>>uint(4-gx))&1 == 1 {
-					img.Set(x+gx+i*6, y+gy, c)
-				}
-			}
-		}
+func drawText(img *image.RGBA, x, y int, s string, c color.RGBA) {
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(c),
+		Face: basicfont.Face7x13,
+		Dot:  fixed.P(x, y+13),
 	}
-}
-
-func glyph5x7(ch byte) [7]byte {
-	// 各行5bit有効（MSBが左）
-	switch ch {
-	case '0':
-		return [7]byte{0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E}
-	case '1':
-		return [7]byte{0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x0E}
-	case '2':
-		return [7]byte{0x1E, 0x01, 0x01, 0x1E, 0x10, 0x10, 0x1F}
-	case '3':
-		return [7]byte{0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E}
-	case '4':
-		return [7]byte{0x10, 0x10, 0x11, 0x11, 0x1F, 0x01, 0x01}
-	case '5':
-		return [7]byte{0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E}
-	case '6':
-		return [7]byte{0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x1E}
-	case '7':
-		return [7]byte{0x1F, 0x01, 0x01, 0x02, 0x04, 0x08, 0x08}
-	case '8':
-		return [7]byte{0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}
-	case '9':
-		return [7]byte{0x1E, 0x11, 0x11, 0x1F, 0x01, 0x01, 0x0E}
-	case ':':
-		return [7]byte{0x00, 0x04, 0x00, 0x00, 0x04, 0x00, 0x00}
-	case '.':
-		return [7]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06}
-	case '%':
-		return [7]byte{0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03}
-	case 'h':
-		return [7]byte{0x10, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x11}
-	case 'm':
-		return [7]byte{0x00, 0x00, 0x1E, 0x15, 0x15, 0x15, 0x15}
-	default:
-		return [7]byte{0, 0, 0, 0, 0, 0, 0}
-	}
+	d.DrawString(s)
 }

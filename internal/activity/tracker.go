@@ -74,6 +74,7 @@ type Tracker struct {
 	limiter     *utils.RateLimiter
 	dataDir     string
 	httpClient  *http.Client
+	newUserCB   NewUserCallback
 	queue       chan Pixel
 	diffQueue   chan []byte
 	ctx         context.Context
@@ -83,6 +84,8 @@ type Tracker struct {
 	activity    map[string]*UserActivity
 	vandalState VandalState
 }
+
+type NewUserCallback func(kind string, user UserActivity)
 
 func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,6 +122,12 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 	}
 	t.loadState()
 	return t
+}
+
+func (t *Tracker) SetNewUserCallback(cb NewUserCallback) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.newUserCB = cb
 }
 
 func (t *Tracker) Start() {
@@ -258,11 +267,14 @@ func (t *Tracker) processPixel(px Pixel) {
 	}
 
 	now := time.Now().UTC()
-	dateKey := now.Format("2006-01-02")
+	jst := time.FixedZone("JST", 9*3600)
+	dateKey := now.In(jst).Format("2006-01-02")
 
 	t.mu.Lock()
 	painterID := strconv.Itoa(painter.ID)
 	entry := t.activity[painterID]
+	newEntry := false
+	newEntryKind := ""
 	if entry == nil {
 		entry = &UserActivity{
 			ID:                  painterID,
@@ -272,6 +284,12 @@ func (t *Tracker) processPixel(px Pixel) {
 			DailyRestoredCounts: make(map[string]int),
 		}
 		t.activity[painterID] = entry
+		newEntry = true
+		if isDiff {
+			newEntryKind = "vandal"
+		} else {
+			newEntryKind = "fix"
+		}
 	} else {
 		if painter.Name != "" {
 			entry.Name = painter.Name
@@ -300,7 +318,16 @@ func (t *Tracker) processPixel(px Pixel) {
 	if err := t.saveVandalStateLocked(); err != nil {
 		log.Printf("failed to save vandal state: %v", err)
 	}
+	cb := t.newUserCB
+	var userCopy UserActivity
+	if newEntry {
+		userCopy = *entry
+	}
 	t.mu.Unlock()
+
+	if newEntry && cb != nil {
+		cb(newEntryKind, userCopy)
+	}
 }
 
 func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {

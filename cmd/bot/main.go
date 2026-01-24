@@ -92,12 +92,15 @@ func main() {
 	// 通知システムの初期化
 	var notifier *notifications.Notifier
 	if globalMonitor != nil {
-		notifier = notifications.NewNotifier(dg, globalMonitor, settingsManager)
+		notifier = notifications.NewNotifier(dg, globalMonitor, settingsManager, dataDir)
 		notifier.StartMonitoring()
 		log.Println("Notification system started")
 	}
+	if notifier != nil {
+		activityTracker.SetNewUserCallback(notifier.NotifyNewUser)
+	}
 
-	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier, limiter) // settingsManager を渡す
+	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier, limiter, dataDir) // settingsManager を渡す
 	dg.AddHandler(h.OnReady)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)

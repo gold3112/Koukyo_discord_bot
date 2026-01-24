@@ -25,9 +25,10 @@ type Handler struct {
 	settings *config.SettingsManager
 	notifier *notifications.Notifier
 	limiter  *utils.RateLimiter // これを追加
+	dataDir  string
 }
 
-func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier, limiter *utils.RateLimiter) *Handler { // limiter 引数を追加
+func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier, limiter *utils.RateLimiter, dataDir string) *Handler { // limiter 引数を追加
 	registry := commands.NewRegistry()
 
 	// すべてのコマンドを配列で一元管理
@@ -40,8 +41,11 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		commands.NewTimeCommand(),
 		commands.NewConvertCommand(),
 		commands.NewSettingsCommand(settingsManager, notifier), // settingsManager を渡す
+		commands.NewNotificationCommand(settingsManager),
 		commands.NewGetCommand(limiter), // limiter を渡すように変更
 		commands.NewPaintCommand(),
+		commands.NewFixUserCommand(dataDir),
+		commands.NewGrfUserCommand(dataDir),
 	)
 	if mon != nil {
 		commandsList = append(commandsList,
@@ -67,6 +71,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		settings: settingsManager, // settingsManager を使用
 		notifier: notifier,
 		limiter:  limiter, // これを追加
+		dataDir:  dataDir,
 	}
 }
 
@@ -268,6 +273,10 @@ func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.Inte
 	// 設定パネルのセレクトメニュー
 	if strings.HasPrefix(customID, "select_") {
 		commands.HandleSettingsSelectMenu(s, i, h.settings)
+		return
+	}
+	if strings.HasPrefix(customID, "userlist:") {
+		commands.HandleUserListPagination(s, i, h.dataDir)
 		return
 	}
 
