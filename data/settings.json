@@ -1,12 +1,17 @@
 {
+  "1421387860077969422": {
+    "notification_channel": "1421387861965537331",
+    "auto_notify_enabled": true,
+    "notification_delay": 0.5,
+    "notification_threshold": 10,
+    "mention_threshold": 50,
+    "notification_metric": "weighted"
+  },
   "guilds": {
-    "1421387860077969422": {
-      "notification_channel": "1421387861965537331",
-      "auto_notify_enabled": true,
-      "notification_delay": 0.1,
-      "notification_threshold": 10,
-      "mention_threshold": 50,
-      "notification_metric": "weighted"
-    }
+    "auto_notify_enabled": false,
+    "notification_delay": 0,
+    "notification_threshold": 0,
+    "mention_threshold": 0,
+    "notification_metric": ""
   }
 }

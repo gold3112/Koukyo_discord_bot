@@ -2,10 +2,13 @@ package monitor
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
+
+	"Koukyo_discord_bot/internal/activity"
 
 	"github.com/gorilla/websocket"
 )
@@ -19,6 +22,10 @@ type Monitor struct {
 	cancel    context.CancelFunc
 	connected bool
 	mu        sync.RWMutex
+	writeMu   sync.Mutex
+	tracker   *activity.Tracker
+	lastMu    sync.Mutex
+	lastMsgAt time.Time
 }
 
 // NewMonitor 新しいMonitorを作成
@@ -32,6 +39,12 @@ func NewMonitor(url string) *Monitor {
 	}
 }
 
+func (m *Monitor) SetActivityTracker(tracker *activity.Tracker) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tracker = tracker
+}
+
 // Connect WebSocketサーバーに接続
 func (m *Monitor) Connect() error {
 	log.Printf("Connecting to WebSocket: %s", m.URL)
@@ -40,11 +53,19 @@ func (m *Monitor) Connect() error {
 	if err != nil {
 		return err
 	}
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 
 	m.mu.Lock()
 	m.conn = conn
 	m.connected = true
 	m.mu.Unlock()
+	m.lastMu.Lock()
+	m.lastMsgAt = time.Now()
+	m.lastMu.Unlock()
 
 	log.Println("WebSocket connected successfully")
 	return nil
@@ -57,6 +78,9 @@ func (m *Monitor) Start() error {
 	}
 
 	go m.receiveLoop()
+	go m.pingLoop()
+	go m.keepaliveLoop()
+	go m.idleWatchLoop()
 	return nil
 }
 
@@ -86,6 +110,7 @@ func (m *Monitor) receiveLoop() {
 				continue
 			}
 
+			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("WebSocket read error: %v", err)
@@ -99,8 +124,95 @@ func (m *Monitor) receiveLoop() {
 				continue
 			}
 
+			m.lastMu.Lock()
+			m.lastMsgAt = time.Now()
+			m.lastMu.Unlock()
+
 			if err := m.handleMessage(messageType, message); err != nil {
 				log.Printf("Message handling error: %v", err)
+			}
+		}
+	}
+}
+
+func (m *Monitor) pingLoop() {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.mu.RLock()
+			conn := m.conn
+			m.mu.RUnlock()
+			if conn == nil {
+				continue
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			m.writeMu.Lock()
+			err := conn.WriteControl(websocket.PingMessage, []byte("ping"), deadline)
+			m.writeMu.Unlock()
+			if err != nil {
+				log.Printf("WebSocket ping error: %v", err)
+				m.mu.Lock()
+				if m.conn == conn {
+					m.conn.Close()
+					m.conn = nil
+					m.connected = false
+				}
+				m.mu.Unlock()
+			}
+		}
+	}
+}
+
+func (m *Monitor) keepaliveLoop() {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.mu.RLock()
+			conn := m.conn
+			m.mu.RUnlock()
+			if conn == nil {
+				continue
+			}
+			m.writeMu.Lock()
+			err := conn.WriteMessage(websocket.TextMessage, []byte("ping"))
+			m.writeMu.Unlock()
+			if err != nil {
+				log.Printf("WebSocket keepalive error: %v", err)
+			}
+		}
+	}
+}
+
+func (m *Monitor) idleWatchLoop() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	log.Printf("WebSocket idle watcher started")
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.lastMu.Lock()
+			last := m.lastMsgAt
+			m.lastMu.Unlock()
+			if last.IsZero() {
+				log.Printf("WebSocket idle for 2s: no messages received (no last message)")
+				continue
+			}
+			elapsed := time.Since(last)
+			if elapsed >= 2*time.Second {
+				log.Printf("WebSocket idle: no messages received for %s", elapsed.Round(time.Millisecond))
 			}
 		}
 	}
@@ -119,19 +231,28 @@ func (m *Monitor) handleMessage(messageType int, message []byte) error {
 
 // handleTextMessage JSONメッセージを処理
 func (m *Monitor) handleTextMessage(message []byte) error {
-	var data MonitorData
-	if err := json.Unmarshal(message, &data); err != nil {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(message, &raw); err != nil {
 		return err
 	}
 
 	// エラーメッセージの場合
-	if data.Type == "error" {
-		log.Printf("Server error: %s", data.Message)
+	if rawType, ok := raw["type"].(string); ok && rawType == "error" {
+		if msg, ok := raw["message"].(string); ok {
+			log.Printf("Server error: %s", msg)
+		} else {
+			log.Printf("Server error: %v", raw["message"])
+		}
 		return nil
 	}
 
-	// メタデータの場合
-	if data.Type == "metadata" {
+	_, hasDiff := raw["diff_percentage"]
+	_, hasPixels := raw["diff_pixels"]
+	if hasDiff || hasPixels || raw["type"] == "metadata" {
+		var data MonitorData
+		if err := json.Unmarshal(message, &data); err != nil {
+			return err
+		}
 		m.State.UpdateData(&data)
 		log.Printf("Updated: Diff=%.2f%%, Weighted=%.2f%%",
 			data.DiffPercentage,
@@ -143,17 +264,26 @@ func (m *Monitor) handleTextMessage(message []byte) error {
 
 // handleBinaryMessage バイナリメッセージ（画像）を処理
 func (m *Monitor) handleBinaryMessage(message []byte) error {
-	// ヘッダーサイズ: 4バイト (type_id: 1バイト + payload_size: 3バイト)
-	headerSize := 4
+	// ヘッダーサイズ: 5バイト (type_id: 1バイト + payload_size: 4バイト)
+	headerSize := 5
 	if len(message) < headerSize {
 		log.Printf("Binary message too short: %d bytes", len(message))
 		return nil
 	}
 
 	typeID := message[0]
-	payload := message[headerSize:]
+	payloadLen := int(binary.LittleEndian.Uint32(message[1:5]))
+	if payloadLen < 0 || headerSize+payloadLen > len(message) {
+		log.Printf("Binary payload size mismatch: header=%d, total=%d", payloadLen, len(message))
+		payloadLen = len(message) - headerSize
+	}
+	payload := message[headerSize : headerSize+payloadLen]
 
-	log.Printf("Received binary data: %d bytes, type_id=%d, payload_size=%d", len(message), typeID, len(payload))
+	log.Printf("Received binary data: %d bytes, type_id=%d, payload_size=%d", len(message), typeID, payloadLen)
+
+	m.mu.RLock()
+	tracker := m.tracker
+	m.mu.RUnlock()
 
 	// payloadのコピーを作成（元のバッファが上書きされるのを防ぐ）
 	payloadCopy := make([]byte, len(payload))
@@ -186,6 +316,11 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 		}
 		m.State.LatestImages.DiffImage = payloadCopy
 		m.State.LatestImages.Timestamp = time.Now()
+		if tracker != nil && !m.State.PowerSaveMode {
+			tracker.EnqueueDiffImage(payloadCopy)
+		} else if tracker != nil {
+			log.Printf("activity tracker skipped: power_save_mode=true")
+		}
 		// 最初の16バイトをログに出力してフォーマットを確認
 		if len(payloadCopy) >= 16 {
 			log.Printf("Stored diff image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
@@ -209,11 +344,11 @@ func (m *Monitor) GetLatestData() *MonitorData {
 func (m *Monitor) GetLatestImages() *ImageData {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	if m.State.LatestImages == nil {
 		return nil
 	}
-	
+
 	// コピーを返す
 	images := &ImageData{
 		LiveImage: append([]byte(nil), m.State.LatestImages.LiveImage...),

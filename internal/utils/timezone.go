@@ -57,7 +57,8 @@ func ParseTimezone(tzName string) (*time.Location, error) {
 	}
 
 	// 短縮形をチェック
-	if fullName, ok := shortNames[tzName]; ok {
+	key := strings.ToLower(strings.TrimSpace(tzName))
+	if fullName, ok := shortNames[key]; ok {
 		return time.LoadLocation(fullName)
 	}
 
@@ -130,10 +131,10 @@ func ConvertTime(fromTz, toTz, timeStr string) (string, error) {
 		convertedTime.Format("2006-01-02"), wd, convertedTime.Format("15:04:05 MST"))
 
 	// 元の時刻と変換先の時刻を両方表示
-	return fmt.Sprintf("**[元] %s (%s)**: %s\n**[先] %s (%s)**: %s",
-		GetTimezoneLabel(fromTz), fromTz,
+	return fmt.Sprintf("**[元] %s %s (%s)**: %s\n**[先] %s %s (%s)**: %s",
+		GetTimezoneFlag(fromTz), GetTimezoneLabel(fromTz), fromTz,
 		sourceTime.Format("2006-01-02 (Mon) 15:04:05 MST"),
-		GetTimezoneLabel(toTz), toTz,
+		GetTimezoneFlag(toTz), GetTimezoneLabel(toTz), toTz,
 		result), nil
 }
 
@@ -155,4 +156,23 @@ func GetTimezoneLabel(tzName string) string {
 		return label
 	}
 	return tzName
+}
+
+// GetTimezoneFlag タイムゾーン名から国旗を取得
+func GetTimezoneFlag(tzName string) string {
+	flags := map[string]string{
+		"UTC":                 "🌐",
+		"America/Los_Angeles": "🇺🇸",
+		"PST":                 "🇺🇸",
+		"PDT":                 "🇺🇸",
+		"Europe/Paris":        "🇫🇷",
+		"CET":                 "🇫🇷",
+		"CEST":                "🇫🇷",
+		"Asia/Tokyo":          "🇯🇵",
+		"JST":                 "🇯🇵",
+	}
+	if flag, ok := flags[tzName]; ok {
+		return flag
+	}
+	return "🌐"
 }

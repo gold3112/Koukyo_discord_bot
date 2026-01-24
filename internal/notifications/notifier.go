@@ -6,6 +6,7 @@ import (
 	"Koukyo_discord_bot/internal/monitor"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type Notifier struct {
 	states                   map[string]*NotificationState
 	mu                       sync.RWMutex
 	lastTimelapseCompletedAt *time.Time
+	lastPowerSaveMode        bool
 }
 
 // NewNotifier 通知システムを作成
@@ -92,20 +94,25 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		return
 	}
 
+	if n.monitor.State.PowerSaveMode {
+		return
+	}
+
 	// 通知指標の値を取得
 	diffValue := getDiffValue(data, settings.NotificationMetric)
+	isZero := isZeroDiff(diffValue)
 
 	// 現在のTierを判定
 	currentTier := calculateTier(diffValue, settings.NotificationThreshold)
 	state := n.getState(guildID)
 
 	// 0%から変動した場合の通知（省電力モード解除）
-	if state.WasZeroDiff && diffValue > 0 {
+	if state.WasZeroDiff && !isZero {
 		n.sendZeroRecoveryNotification(guildID, settings, data, diffValue)
 	}
 
 	// 0%に戻った場合の通知（修復完了）
-	if !state.WasZeroDiff && diffValue == 0 {
+	if !state.WasZeroDiff && isZero {
 		n.sendZeroCompletionNotification(guildID, settings, data)
 	}
 
@@ -118,7 +125,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	// 状態を更新
 	state.LastTier = currentTier
 	state.MentionTriggered = diffValue >= settings.MentionThreshold
-	state.WasZeroDiff = (diffValue == 0)
+	state.WasZeroDiff = isZero
 }
 
 // scheduleDelayedNotification 遅延通知をスケジュール
@@ -503,6 +510,11 @@ func calculateTier(diffValue, threshold float64) Tier {
 	return Tier10
 }
 
+func isZeroDiff(value float64) bool {
+	const zeroDiffEpsilon = 0.005
+	return math.Abs(value) <= zeroDiffEpsilon
+}
+
 // getTierColor Tierに応じた色を取得
 func getTierColor(tier Tier) int {
 	switch tier {
@@ -533,6 +545,16 @@ func (n *Notifier) StartMonitoring() {
 				continue
 			}
 
+			currentPowerSave := n.monitor.State.PowerSaveMode
+			if n.lastPowerSaveMode && !currentPowerSave {
+				n.notifyPowerSaveResume()
+			}
+			n.lastPowerSaveMode = currentPowerSave
+
+			if currentPowerSave {
+				continue
+			}
+
 			// Botが参加している全サーバーをチェック
 			for _, guild := range n.session.State.Guilds {
 				guildID := guild.ID
@@ -559,6 +581,22 @@ func (n *Notifier) StartMonitoring() {
 	}()
 
 	log.Println("Notification monitoring started")
+}
+
+func (n *Notifier) notifyPowerSaveResume() {
+	for _, guild := range n.session.State.Guilds {
+		gs := n.settings.GetGuildSettings(guild.ID)
+		if !gs.AutoNotifyEnabled || gs.NotificationChannel == nil {
+			continue
+		}
+		_, err := n.session.ChannelMessageSend(
+			*gs.NotificationChannel,
+			"🌅 省電力モードを解除しました。更新を再開します。",
+		)
+		if err != nil {
+			log.Printf("Failed to send power-save resume notification to guild %s: %v", guild.ID, err)
+		}
+	}
 }
 
 func (n *Notifier) postTimelapseToGuilds(frames []monitor.TimelapseFrame) {

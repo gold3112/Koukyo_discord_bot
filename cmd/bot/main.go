@@ -1,13 +1,14 @@
 package main
 
 import (
+	"Koukyo_discord_bot/internal/activity"
 	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/handler"
 	"Koukyo_discord_bot/internal/models"
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/notifications"
-	"Koukyo_discord_bot/internal/version"
 	"Koukyo_discord_bot/internal/utils"
+	"Koukyo_discord_bot/internal/version"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,10 +43,23 @@ func main() {
 	settingsManager := config.NewSettingsManager(settingsPath)
 	defer settingsManager.Close() // ここを追加
 	log.Printf("Settings loaded from: %s", settingsPath)
+	dataDir := filepath.Dir(settingsPath)
 
-    // レートリミッターの初期化
-    limiter := utils.NewRateLimiter(3)
-    defer limiter.Close()
+	// レートリミッターの初期化
+	limiter := utils.NewRateLimiter(3)
+	defer limiter.Close()
+
+	// ユーザー活動トラッカーの初期化
+	activityTracker := activity.NewTracker(activity.Config{
+		TopLeftTileX:  1818,
+		TopLeftTileY:  806,
+		TopLeftPixelX: 989,
+		TopLeftPixelY: 358,
+		Width:         107,
+		Height:        142,
+	}, limiter, dataDir)
+	activityTracker.Start()
+	defer activityTracker.Stop()
 
 	// WebSocket監視の開始
 	powerSaveMode := os.Getenv("POWER_SAVE_MODE") == "1"
@@ -55,6 +69,7 @@ func main() {
 			log.Println("Power-save mode enabled: setting PowerSaveMode on monitor state")
 			globalMonitor.State.PowerSaveMode = true
 		}
+		globalMonitor.SetActivityTracker(activityTracker)
 
 		if err := globalMonitor.Start(); err != nil {
 			log.Printf("Failed to start monitor: %v", err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/ring"
 	"image/png"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -14,6 +15,8 @@ const (
 	historyLimit = 20000
 	// timelapseFrameLimit タイムラプスで保持するフレームの最大数
 	timelapseFrameLimit = 512
+	// zeroDiffEpsilon 0%判定の許容幅
+	zeroDiffEpsilon = 0.005
 )
 
 // MonitorData WebSocketから受信する監視データ
@@ -130,21 +133,21 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 	}
 
 	// ゼロ差分の追跡
-	if data.DiffPercentage == 0 {
+	if isZeroDiff(data.DiffPercentage) {
 		if ms.ZeroDiffStartTime == nil {
 			now := time.Now()
 			ms.ZeroDiffStartTime = &now
-		} else {
+		} else if !ms.PowerSaveMode {
 			elapsed := time.Since(*ms.ZeroDiffStartTime)
-			if elapsed >= 15*time.Minute && !ms.PowerSaveMode {
-				ms.PowerSaveRestart = true
-			} else if elapsed >= 10*time.Minute && !ms.PowerSaveMode {
+			if elapsed >= 10*time.Minute {
 				ms.PowerSaveMode = true
+				ms.PowerSaveRestart = true
 			}
 		}
 	} else {
 		if ms.PowerSaveMode {
 			ms.PowerSaveMode = false
+			ms.PowerSaveRestart = false
 		}
 		ms.ZeroDiffStartTime = nil
 	}
@@ -250,7 +253,6 @@ func (ms *MonitorState) updateHeatmapAsync(diffImage []byte) {
 	}
 }
 
-
 // GetLatestDiffPercentage 最新の差分率を取得
 func (ms *MonitorState) GetLatestDiffPercentage() float64 {
 	ms.mu.RLock()
@@ -330,6 +332,10 @@ func (ms *MonitorState) collectTimelapseFrames() []TimelapseFrame {
 		return out[i].Timestamp.Before(out[j].Timestamp)
 	})
 	return out
+}
+
+func isZeroDiff(value float64) bool {
+	return math.Abs(value) <= zeroDiffEpsilon
 }
 
 // GetLastTimelapseFrames 直近完了したタイムラプスのフレームを取得

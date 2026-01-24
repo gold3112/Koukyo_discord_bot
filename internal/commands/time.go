@@ -68,6 +68,15 @@ func (c *TimeCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interactio
 	to := ""
 	timeStr := ""
 	dateStr := ""
+	if len(i.ApplicationCommandData().Options) == 0 {
+		embed := embeds.BuildTimeEmbed()
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{embed},
+			},
+		})
+	}
 	for _, opt := range i.ApplicationCommandData().Options {
 		switch opt.Name {
 		case "from":
@@ -135,13 +144,13 @@ func (c *TimeCommand) SlashDefinition() *discordgo.ApplicationCommand {
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "from",
 				Description: "変換元タイムゾーン (例: JST, PST, UTC)",
-				Required:    true,
+				Required:    false,
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "to",
 				Description: "変換先タイムゾーン (例: JST, PST, UTC)",
-				Required:    true,
+				Required:    false,
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
