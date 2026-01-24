@@ -6,10 +6,18 @@ import (
 	"os"
 	"path/filepath"
 
+	"Koukyo_discord_bot/internal/eastereggs"
+
 	"github.com/bwmarrin/discordgo"
 )
 
 func (h *Handler) handleEasterEgg(s *discordgo.Session, m *discordgo.MessageCreate, cmdName string) bool {
+	if reply, ok := eastereggs.HandleEndless(cmdName); ok {
+		if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
+			log.Printf("Failed to send easter egg response: %v", err)
+		}
+		return true
+	}
 	if h.dataDir == "" {
 		return false
 	}
