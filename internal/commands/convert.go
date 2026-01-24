@@ -28,6 +28,29 @@ func (c *ConvertCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageC
 		return c.sendUsage(s, m.ChannelID)
 	}
 
+	// URLから座標抽出
+	if strings.HasPrefix(args[0], "http://") || strings.HasPrefix(args[0], "https://") {
+		url := args[0]
+		// 例: .../x/1818/y/806/px/989/py/358 など
+		var tileX, tileY, pixelX, pixelY int
+		var lng, lat float64
+		found := false
+		// タイル・ピクセル座標抽出
+		if n, _ := fmt.Sscanf(url, "%*[^/]x/%d/y/%d/px/%d/py/%d", &tileX, &tileY, &pixelX, &pixelY); n == 4 {
+			embed := embeds.BuildConvertPixelEmbed(tileX, tileY, pixelX, pixelY)
+			_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
+			return err
+		}
+		// 経度緯度抽出
+		if n, _ := fmt.Sscanf(url, "%*[^?]?lng=%f&lat=%f", &lng, &lat); n == 2 {
+			embed := embeds.BuildConvertLngLatEmbed(lng, lat)
+			_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
+			return err
+		}
+		// その他のパターンも必要に応じて追加
+		return c.sendUsage(s, m.ChannelID)
+	}
+
 	// ハイフン形式の場合（例: 1818-806-989-358）
 	if strings.Contains(args[0], "-") {
 		parts := strings.Split(args[0], "-")
