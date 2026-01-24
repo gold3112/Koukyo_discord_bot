@@ -115,7 +115,28 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 		ms.ReferencePixels.Total = data.TotalPixels
 	}
 
-	// 差分履歴の追加
+	// ゼロ差分の追跡
+	if isZeroDiff(data.DiffPercentage) {
+		if ms.ZeroDiffStartTime == nil {
+			now := time.Now()
+			ms.ZeroDiffStartTime = &now
+		} else if !ms.PowerSaveMode {
+			elapsed := time.Since(*ms.ZeroDiffStartTime)
+			if elapsed >= 10*time.Minute {
+				ms.PowerSaveMode = true
+				ms.PowerSaveRestart = true
+				ms.resetDiffHistoryLocked()
+			}
+		}
+	} else {
+		if ms.PowerSaveMode {
+			ms.PowerSaveMode = false
+			ms.PowerSaveRestart = false
+		}
+		ms.ZeroDiffStartTime = nil
+	}
+
+	// 差分履歴の追加（省電力中は保存しない）
 	if !ms.PowerSaveMode {
 		ms.DiffHistory.Value = DiffRecord{
 			Timestamp:  data.Timestamp,
@@ -130,26 +151,6 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 			}
 			ms.WeightedDiffHistory = ms.WeightedDiffHistory.Next()
 		}
-	}
-
-	// ゼロ差分の追跡
-	if isZeroDiff(data.DiffPercentage) {
-		if ms.ZeroDiffStartTime == nil {
-			now := time.Now()
-			ms.ZeroDiffStartTime = &now
-		} else if !ms.PowerSaveMode {
-			elapsed := time.Since(*ms.ZeroDiffStartTime)
-			if elapsed >= 10*time.Minute {
-				ms.PowerSaveMode = true
-				ms.PowerSaveRestart = true
-			}
-		}
-	} else {
-		if ms.PowerSaveMode {
-			ms.PowerSaveMode = false
-			ms.PowerSaveRestart = false
-		}
-		ms.ZeroDiffStartTime = nil
 	}
 
 	// タイムラプスの開始/終了判定
@@ -336,6 +337,11 @@ func (ms *MonitorState) collectTimelapseFrames() []TimelapseFrame {
 
 func isZeroDiff(value float64) bool {
 	return math.Abs(value) <= zeroDiffEpsilon
+}
+
+func (ms *MonitorState) resetDiffHistoryLocked() {
+	ms.DiffHistory = ring.New(historyLimit)
+	ms.WeightedDiffHistory = ring.New(historyLimit)
 }
 
 // GetLastTimelapseFrames 直近完了したタイムラプスのフレームを取得
