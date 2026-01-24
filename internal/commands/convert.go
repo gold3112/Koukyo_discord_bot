@@ -31,23 +31,28 @@ func (c *ConvertCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageC
 	// URLから座標抽出
 	if strings.HasPrefix(args[0], "http://") || strings.HasPrefix(args[0], "https://") {
 		url := args[0]
-		// 例: .../x/1818/y/806/px/989/py/358 など
-		var tileX, tileY, pixelX, pixelY int
-		var lng, lat float64
-		found := false
-		// タイル・ピクセル座標抽出
-		if n, _ := fmt.Sscanf(url, "%*[^/]x/%d/y/%d/px/%d/py/%d", &tileX, &tileY, &pixelX, &pixelY); n == 4 {
-			embed := embeds.BuildConvertPixelEmbed(tileX, tileY, pixelX, pixelY)
-			_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
-			return err
+		// https://wplace.live/?lat=35.68...&lng=139.75...&zoom=...
+		lat, lng := 0.0, 0.0
+		latFound, lngFound := false, false
+		for _, part := range strings.Split(strings.TrimPrefix(strings.SplitN(url, "?", 2)[1], "/"), "&") {
+			if strings.HasPrefix(part, "lat=") {
+				if v, err := strconv.ParseFloat(strings.TrimPrefix(part, "lat="), 64); err == nil {
+					lat = v
+					latFound = true
+				}
+			}
+			if strings.HasPrefix(part, "lng=") {
+				if v, err := strconv.ParseFloat(strings.TrimPrefix(part, "lng="), 64); err == nil {
+					lng = v
+					lngFound = true
+				}
+			}
 		}
-		// 経度緯度抽出
-		if n, _ := fmt.Sscanf(url, "%*[^?]?lng=%f&lat=%f", &lng, &lat); n == 2 {
+		if latFound && lngFound {
 			embed := embeds.BuildConvertLngLatEmbed(lng, lat)
 			_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)
 			return err
 		}
-		// その他のパターンも必要に応じて追加
 		return c.sendUsage(s, m.ChannelID)
 	}
 
