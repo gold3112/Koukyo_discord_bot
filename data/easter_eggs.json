@@ -39,20 +39,6 @@
             { "reply": "https://gold3112.online/for-bot/ouri-boom.gif", "weight": 0.1 }
         ]
     },
-    "reishou": {
-        "aliases": [
-            "uo",
-            "うお",
-            "uow",
-            "うおw",
-            "うおｗ",
-            "冷笑"
-        ],
-        "choices": [
-            { "reply": "あ、そういうノリ😅", "weight": 1 },
-            { "reply": "うおｗ😅", "weight": 1 }
-        ]
-    },
     "kyokoku": {
         "aliases": [
             "kyokoku",
