@@ -211,11 +211,22 @@ func (ms *MonitorState) UpdateImages(images *ImageData) {
 
 // updateHeatmapAsync はヒートマップ集計を非同期で行う
 func (ms *MonitorState) updateHeatmapAsync(diffImage []byte) {
+	if err := ms.updateHeatmap(diffImage); err != nil {
+		return
+	}
+}
+
+// UpdateHeatmapFromDiff はヒートマップ集計を同期で行う
+func (ms *MonitorState) UpdateHeatmapFromDiff(diffImage []byte) error {
+	return ms.updateHeatmap(diffImage)
+}
+
+func (ms *MonitorState) updateHeatmap(diffImage []byte) error {
 	img, err := png.Decode(bytes.NewReader(diffImage))
 	if err != nil {
 		// 必要であればログ出力
 		// log.Printf("failed to decode diff image for heatmap: %v", err)
-		return
+		return err
 	}
 
 	b := img.Bounds()
@@ -252,6 +263,7 @@ func (ms *MonitorState) updateHeatmapAsync(diffImage []byte) {
 			}
 		}
 	}
+	return nil
 }
 
 // GetLatestDiffPercentage 最新の差分率を取得

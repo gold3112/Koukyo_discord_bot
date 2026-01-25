@@ -330,7 +330,19 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 	default:
 		log.Printf("Unknown binary type_id: %d", typeID)
 	}
+	var imagesCopy *ImageData
+	if m.State.LatestImages != nil {
+		imagesCopy = &ImageData{
+			LiveImage: append([]byte(nil), m.State.LatestImages.LiveImage...),
+			DiffImage: append([]byte(nil), m.State.LatestImages.DiffImage...),
+			Timestamp: m.State.LatestImages.Timestamp,
+		}
+	}
 	m.mu.Unlock()
+
+	if imagesCopy != nil {
+		m.State.UpdateImages(imagesCopy)
+	}
 
 	return nil
 }
