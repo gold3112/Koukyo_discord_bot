@@ -14,7 +14,7 @@ import (
 func BuildHeatmapPNG(counts []uint32, gridW, gridH int, outW, outH int) (*bytes.Buffer, error) {
 	img := image.NewRGBA(image.Rect(0, 0, outW, outH))
 	// 背景
-	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{245, 245, 245, 255}}, image.Point{}, draw.Src)
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{0, 0, 0, 255}}, image.Point{}, draw.Src)
 
 	if counts == nil || gridW <= 0 || gridH <= 0 {
 		buf := &bytes.Buffer{}
