@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"Koukyo_discord_bot/internal/monitor"
+	"fmt"
 	"math"
 )
 
@@ -65,5 +66,22 @@ func getTierColor(tier Tier) int {
 		return 0xFFFF00 // 黄色
 	default:
 		return 0x808080 // グレー
+	}
+}
+
+func tierRangeLabel(tier Tier, threshold float64) string {
+	switch tier {
+	case Tier50:
+		return "50%以上"
+	case Tier40:
+		return "40%台"
+	case Tier30:
+		return "30%台"
+	case Tier20:
+		return "20%台"
+	case Tier10:
+		return "10%台"
+	default:
+		return fmt.Sprintf("%.0f%%未満", threshold)
 	}
 }

@@ -111,9 +111,13 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	}
 
 	// Tierが変化した場合のみ通知
-	if currentTier > state.LastTier {
+	if currentTier != state.LastTier {
 		// 遅延通知を送信
-		n.scheduleDelayedNotification(guildID, settings, data, currentTier, diffValue)
+		if currentTier > state.LastTier {
+			n.scheduleDelayedNotification(guildID, settings, data, currentTier, diffValue, notificationIncrease)
+		} else {
+			n.scheduleDelayedNotification(guildID, settings, data, currentTier, diffValue, notificationDecrease)
+		}
 	}
 
 	// 状態を更新
@@ -129,6 +133,7 @@ func (n *Notifier) scheduleDelayedNotification(
 	data *monitor.MonitorData,
 	tier Tier,
 	diffValue float64,
+	kind notificationKind,
 ) {
 	state := n.getState(guildID)
 
@@ -144,6 +149,10 @@ func (n *Notifier) scheduleDelayedNotification(
 		select {
 		case <-time.After(delay):
 			// 遅延後に通知を送信
+			if kind == notificationDecrease {
+				n.sendDecreaseNotification(guildID, settings, data, tier, diffValue)
+				return
+			}
 			n.sendNotification(guildID, settings, data, tier, diffValue)
 		case <-state.PendingNotifyTask:
 			// キャンセルされた
@@ -151,6 +160,13 @@ func (n *Notifier) scheduleDelayedNotification(
 		}
 	}()
 }
+
+type notificationKind int
+
+const (
+	notificationIncrease notificationKind = iota
+	notificationDecrease
+)
 
 // sendNotification 通知を送信
 func (n *Notifier) sendNotification(
@@ -278,6 +294,110 @@ func (n *Notifier) sendNotification(
 		log.Printf("Failed to send notification to channel %s: %v", channelID, err)
 	} else {
 		log.Printf("Notification sent to guild %s: %.2f%%", guildID, diffValue)
+	}
+}
+
+// sendDecreaseNotification Tierが下がった通知を送信
+func (n *Notifier) sendDecreaseNotification(
+	guildID string,
+	settings config.GuildSettings,
+	data *monitor.MonitorData,
+	tier Tier,
+	diffValue float64,
+) {
+	channelID := *settings.NotificationChannel
+
+	// メトリックラベル
+	metricLabel := "差分率"
+	if settings.NotificationMetric == "weighted" {
+		metricLabel = "加重差分率"
+	}
+
+	tierLabel := tierRangeLabel(tier, settings.NotificationThreshold)
+	message := fmt.Sprintf(
+		"【Wplace速報】 %sが%sまで減少しました。[現在%.2f%%]",
+		metricLabel,
+		tierLabel,
+		diffValue,
+	)
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "🏯 Wplace 差分減少",
+		Description: fmt.Sprintf("現在の%s: **%.2f%%**", metricLabel, diffValue),
+		Color:       getTierColor(tier),
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "📊 差分率 (全体)",
+				Value:  fmt.Sprintf("%.2f%%", data.DiffPercentage),
+				Inline: true,
+			},
+			{
+				Name:   "📈 差分ピクセル (全体)",
+				Value:  fmt.Sprintf("%d / %d", data.DiffPixels, data.TotalPixels),
+				Inline: true,
+			},
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "自動通知システム",
+		},
+	}
+
+	// 加重差分率がある場合は追加
+	if data.WeightedDiffPercentage != nil {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "🔍 加重差分率 (菊重視)",
+			Value:  fmt.Sprintf("%.2f%%", *data.WeightedDiffPercentage),
+			Inline: true,
+		})
+	}
+
+	// 加重差分ピクセルがある場合は追加
+	if data.ChrysanthemumDiffPixels > 0 || data.BackgroundDiffPixels > 0 {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "🔍 差分ピクセル (菊/背景)",
+			Value:  fmt.Sprintf("菊 %d / %d | 背景 %d / %d", data.ChrysanthemumDiffPixels, data.ChrysanthemumTotalPixels, data.BackgroundDiffPixels, data.BackgroundTotalPixels),
+			Inline: false,
+		})
+	}
+
+	// 監視ピクセル数を追加
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "📐 監視ピクセル数",
+		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
+		Inline: false,
+	})
+
+	// 画像を取得して結合
+	var files []*discordgo.File
+	images := n.monitor.GetLatestImages()
+	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
+		combinedImage, err := embeds.CombineImages(images.LiveImage, images.DiffImage)
+		if err == nil {
+			files = append(files, &discordgo.File{
+				Name:        "koukyo_status.png",
+				ContentType: "image/png",
+				Reader:      combinedImage,
+			})
+			embed.Image = &discordgo.MessageEmbedImage{
+				URL: "attachment://koukyo_status.png",
+			}
+		} else {
+			log.Printf("Failed to combine images for decrease notification: %v", err)
+		}
+	}
+
+	// メッセージを送信
+	_, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content: message,
+		Embeds:  []*discordgo.MessageEmbed{embed},
+		Files:   files,
+	})
+
+	if err != nil {
+		log.Printf("Failed to send decrease notification to channel %s: %v", channelID, err)
+	} else {
+		log.Printf("Decrease notification sent to guild %s: %.2f%%", guildID, diffValue)
 	}
 }
 
