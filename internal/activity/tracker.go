@@ -59,8 +59,10 @@ type UserActivity struct {
 	LastSeen            string         `json:"last_seen"`
 	VandalCount         int            `json:"vandal_count"`
 	RestoredCount       int            `json:"restored_count"`
+	ActivityScore       int            `json:"activity_score"`
 	DailyVandalCounts   map[string]int `json:"daily_vandal_counts,omitempty"`
 	DailyRestoredCounts map[string]int `json:"daily_restored_counts,omitempty"`
+	DailyActivityScores map[string]int `json:"daily_activity_scores,omitempty"`
 	LastPixel           *PixelRef      `json:"last_pixel,omitempty"`
 }
 
@@ -278,14 +280,14 @@ func (t *Tracker) processPixel(px Pixel) {
 	entry := t.activity[painterID]
 	if entry == nil {
 		entry = &UserActivity{
-			ID:                  painterID,
-			Name:                painter.Name,
-			AllianceName:        painter.AllianceName,
-			DailyVandalCounts:   make(map[string]int),
-			DailyRestoredCounts: make(map[string]int),
+			ID:            painterID,
+			Name:          painter.Name,
+			AllianceName:  painter.AllianceName,
 		}
+		ensureActivityMaps(entry)
 		t.activity[painterID] = entry
 	} else {
+		ensureActivityMaps(entry)
 		if painter.Name != "" {
 			entry.Name = painter.Name
 		}
@@ -302,6 +304,8 @@ func (t *Tracker) processPixel(px Pixel) {
 	if isDiff {
 		entry.VandalCount++
 		entry.DailyVandalCounts[dateKey]++
+		entry.ActivityScore--
+		entry.DailyActivityScores[dateKey]--
 		t.vandalState.PixelToPainter[key] = painterID
 		if entry.VandalCount == 5 {
 			notifyKind = "vandal"
@@ -310,6 +314,8 @@ func (t *Tracker) processPixel(px Pixel) {
 	} else {
 		entry.RestoredCount++
 		entry.DailyRestoredCounts[dateKey]++
+		entry.ActivityScore++
+		entry.DailyActivityScores[dateKey]++
 		delete(t.vandalState.PixelToPainter, key)
 		if entry.RestoredCount == 5 {
 			notifyKind = "fix"
@@ -456,6 +462,11 @@ func (t *Tracker) loadState() {
 	if data, err := os.ReadFile(activityPath); err == nil {
 		var entries map[string]*UserActivity
 		if err := json.Unmarshal(data, &entries); err == nil {
+			for _, entry := range entries {
+				ensureActivityMaps(entry)
+				entry.ActivityScore = entry.RestoredCount - entry.VandalCount
+				entry.DailyActivityScores = buildDailyActivityScores(entry)
+			}
 			t.activity = entries
 		}
 	}
@@ -488,6 +499,29 @@ func (t *Tracker) saveVandalStateLocked() error {
 		return err
 	}
 	return os.WriteFile(path, payload, 0644)
+}
+
+func ensureActivityMaps(entry *UserActivity) {
+	if entry.DailyVandalCounts == nil {
+		entry.DailyVandalCounts = make(map[string]int)
+	}
+	if entry.DailyRestoredCounts == nil {
+		entry.DailyRestoredCounts = make(map[string]int)
+	}
+	if entry.DailyActivityScores == nil {
+		entry.DailyActivityScores = make(map[string]int)
+	}
+}
+
+func buildDailyActivityScores(entry *UserActivity) map[string]int {
+	out := make(map[string]int)
+	for dateKey, count := range entry.DailyVandalCounts {
+		out[dateKey] -= count
+	}
+	for dateKey, count := range entry.DailyRestoredCounts {
+		out[dateKey] += count
+	}
+	return out
 }
 
 func diffPixelsToList(diff map[string]Pixel) [][]int {

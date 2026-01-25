@@ -68,14 +68,16 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 
 	vandals := buildRanking(entries, dateKey, true)
 	restores := buildRanking(entries, dateKey, false)
+	activities := buildActivityRanking(entries, dateKey)
 
 	vandalText := formatRanking(vandals)
 	restoreText := formatRanking(restores)
+	activityText := formatActivityRanking(activities)
 
 	titleDate := reportTime.In(jst).Format("2006-01-02 (JST)")
 	embed := &discordgo.MessageEmbed{
 		Title:       "📊 日次ランキング",
-		Description: fmt.Sprintf("%s の荒らし/修復ランキング", titleDate),
+		Description: fmt.Sprintf("%s の荒らし/修復/総合ランキング", titleDate),
 		Color:       0x1E90FF,
 		Fields: []*discordgo.MessageEmbedField{
 			{
@@ -86,6 +88,11 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 			{
 				Name:   "🛠️ 修復ランキング",
 				Value:  restoreText,
+				Inline: false,
+			},
+			{
+				Name:   "🧮 総合ランキング (修復 - 荒らし)",
+				Value:  activityText,
 				Inline: false,
 			},
 		},
@@ -161,6 +168,57 @@ func formatRanking(entries []rankingEntry) string {
 			display = fmt.Sprintf("%s (%s)", display, entry.Alliance)
 		}
 		lines = append(lines, fmt.Sprintf("%d. %s - %d", i+1, display, entry.Count))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildActivityRanking(entries map[string]*activity.UserActivity, dateKey string) []rankingEntry {
+	out := make([]rankingEntry, 0)
+	for id, entry := range entries {
+		count := entry.DailyActivityScores[dateKey]
+		if count == 0 {
+			continue
+		}
+		name := entry.Name
+		if name == "" {
+			name = fmt.Sprintf("ID:%s", id)
+		}
+		out = append(out, rankingEntry{
+			ID:       id,
+			Name:     name,
+			Alliance: entry.AllianceName,
+			Count:    count,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+func formatActivityRanking(entries []rankingEntry) string {
+	if len(entries) == 0 {
+		return "該当なし"
+	}
+	limit := 10
+	if len(entries) < limit {
+		limit = len(entries)
+	}
+	lines := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		entry := entries[i]
+		display := entry.Name
+		if entry.Alliance != "" {
+			display = fmt.Sprintf("%s (%s)", display, entry.Alliance)
+		}
+		countText := fmt.Sprintf("%d", entry.Count)
+		if entry.Count > 0 {
+			countText = fmt.Sprintf("+%d", entry.Count)
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s - %s", i+1, display, countText))
 	}
 	return strings.Join(lines, "\n")
 }
