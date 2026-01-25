@@ -1,6 +1,48 @@
 {
+    "endless": {
+        "choices": [
+            { "reply": "あ゛っ゛…ちゃかぁい！", "weight": 1 },
+            { "reply": "ごｌｄ(さん)", "weight": 1 },
+            { "reply": "元幼女", "weight": 1 },
+            { "reply": "Placerだぁ！", "weight": 1 },
+            { "reply": "https://gold3112.online/for-bot/endless-boom.gif", "weight": 1 }
+        ]
+    },
+    "kuma": {
+        "choices": [
+            { "reply": "「戦場のリョナリスト」", "weight": 1 },
+            { "reply": "https://gold3112.online/for-bot/kuma.gif", "weight": 1 }
+        ]
+    },
+    "エッチなカニ4選": {
+        "choices": [
+            { "reply": "エッチガニ", "weight": 1 },
+            { "reply": "毛蟹", "weight": 1 },
+            { "reply": "どこにも居場所がない蟹", "weight": 1 },
+            { "reply": "スケベガ二", "weight": 1 }
+        ]
+    },
     "s.bm": "-# ???「(´-`).｡oO(貴方たちの生死は私にかかっています...。)」",
     "工口":"工口あるよ(笑)",
     "gin": "ginさんLOVE(発作)",
     "titanium": "金属仲間 by gold"
+    ,
+    "yaju": {
+        "aliases": [
+            "yaju",
+            "yjc",
+            "yajuu",
+            "yajuusenpai",
+            "yajuu-senpai",
+            "野獣先輩",
+            "野獣",
+            "やじゅう",
+            "やじゅうせんぱい",
+            "114514",
+            "1919",
+            "810",
+            "senpai"
+        ],
+        "reply": "# ヌゥン！ ヘッ！　ヘッ！"
+    }
 }
