@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"math"
 )
 
 // BuildHeatmapPNG グリッド集計からヒートマップ画像を生成
@@ -59,7 +60,8 @@ func BuildHeatmapPNG(counts []uint32, gridW, gridH int, outW, outH int) (*bytes.
 			if v == 0 {
 				continue
 			}
-			col := heatColor(float64(v) / float64(maxv))
+			norm := math.Log1p(float64(v)) / math.Log1p(float64(maxv))
+			col := heatColor(norm)
 			x0 := offsetX + int(float64(gx)*scale)
 			y0 := offsetY + int(float64(gy)*scale)
 			x1 := offsetX + int(float64(gx+1)*scale)
