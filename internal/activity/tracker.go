@@ -276,8 +276,6 @@ func (t *Tracker) processPixel(px Pixel) {
 	t.mu.Lock()
 	painterID := strconv.Itoa(painter.ID)
 	entry := t.activity[painterID]
-	newEntry := false
-	newEntryKind := ""
 	if entry == nil {
 		entry = &UserActivity{
 			ID:                  painterID,
@@ -287,12 +285,6 @@ func (t *Tracker) processPixel(px Pixel) {
 			DailyRestoredCounts: make(map[string]int),
 		}
 		t.activity[painterID] = entry
-		newEntry = true
-		if isDiff {
-			newEntryKind = "vandal"
-		} else {
-			newEntryKind = "fix"
-		}
 	} else {
 		if painter.Name != "" {
 			entry.Name = painter.Name
@@ -305,14 +297,24 @@ func (t *Tracker) processPixel(px Pixel) {
 	entry.LastSeen = now.Format(time.RFC3339Nano)
 	entry.LastPixel = &PixelRef{X: px.AbsX, Y: px.AbsY}
 
+	notifyKind := ""
+	shouldNotify := false
 	if isDiff {
 		entry.VandalCount++
 		entry.DailyVandalCounts[dateKey]++
 		t.vandalState.PixelToPainter[key] = painterID
+		if entry.VandalCount == 5 {
+			notifyKind = "vandal"
+			shouldNotify = true
+		}
 	} else {
 		entry.RestoredCount++
 		entry.DailyRestoredCounts[dateKey]++
 		delete(t.vandalState.PixelToPainter, key)
+		if entry.RestoredCount == 5 {
+			notifyKind = "fix"
+			shouldNotify = true
+		}
 	}
 
 	if err := t.saveActivityLocked(); err != nil {
@@ -323,13 +325,13 @@ func (t *Tracker) processPixel(px Pixel) {
 	}
 	cb := t.newUserCB
 	var userCopy UserActivity
-	if newEntry {
+	if shouldNotify {
 		userCopy = *entry
 	}
 	t.mu.Unlock()
 
-	if newEntry && cb != nil {
-		cb(newEntryKind, userCopy)
+	if shouldNotify && cb != nil {
+		cb(notifyKind, userCopy)
 	}
 }
 

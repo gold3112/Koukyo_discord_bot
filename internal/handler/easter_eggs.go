@@ -12,6 +12,20 @@ import (
 )
 
 func (h *Handler) handleEasterEgg(s *discordgo.Session, m *discordgo.MessageCreate, cmdName string) bool {
+	if reply, ok := eastereggs.HandleSleepyHeresy(m.Content, m.GuildID, m.Author.ID); ok {
+		if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
+			log.Printf("Failed to send easter egg response: %v", err)
+		}
+		return true
+	}
+	if replies, ok := eastereggs.HandleSleepyboard(cmdName, m.GuildID, m.Author.ID); ok {
+		for _, reply := range replies {
+			if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
+				log.Printf("Failed to send easter egg response: %v", err)
+			}
+		}
+		return true
+	}
 	if reply, ok := eastereggs.RandomReply(cmdName); ok {
 		if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
 			log.Printf("Failed to send easter egg response: %v", err)
