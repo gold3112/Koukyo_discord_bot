@@ -462,12 +462,22 @@ func (t *Tracker) loadState() {
 	if data, err := os.ReadFile(activityPath); err == nil {
 		var entries map[string]*UserActivity
 		if err := json.Unmarshal(data, &entries); err == nil {
+			dirty := false
 			for _, entry := range entries {
+				expectedScore := entry.RestoredCount - entry.VandalCount
+				if entry.DailyActivityScores == nil || entry.ActivityScore != expectedScore {
+					dirty = true
+				}
 				ensureActivityMaps(entry)
-				entry.ActivityScore = entry.RestoredCount - entry.VandalCount
+				entry.ActivityScore = expectedScore
 				entry.DailyActivityScores = buildDailyActivityScores(entry)
 			}
 			t.activity = entries
+			if dirty {
+				if err := t.saveActivityLocked(); err != nil {
+					log.Printf("failed to migrate user activity: %v", err)
+				}
+			}
 		}
 	}
 
