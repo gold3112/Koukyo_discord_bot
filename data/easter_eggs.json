@@ -47,7 +47,9 @@
             "挙国",
             "挙国一致",
             "挙国一致内閣",
-            "きょこく"
+            "きょこく",
+            "kasu",
+            "カス"
         ],
         "choices": [
             { "reply": "https://gold3112.online/for-bot/kyokoku-munou.webp", "weight": 1 },
