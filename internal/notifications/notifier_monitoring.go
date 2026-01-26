@@ -5,6 +5,7 @@ import (
 	"Koukyo_discord_bot/internal/monitor"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -26,6 +27,7 @@ func (n *Notifier) StartMonitoring() {
 			currentPowerSave := n.monitor.State.PowerSaveMode
 			if n.lastPowerSaveMode && !currentPowerSave {
 				n.notifyPowerSaveResume()
+				n.clearPowerSaveFlag()
 			}
 			n.lastPowerSaveMode = currentPowerSave
 
@@ -53,6 +55,7 @@ func (n *Notifier) StartMonitoring() {
 			// 省電力モード再起動チェック
 			if n.monitor.State.PowerSaveRestart {
 				log.Println("Power-save restart triggered: exiting for restart with POWER_SAVE_MODE=1")
+				n.setPowerSaveFlag()
 				os.Exit(0)
 			}
 		}
@@ -108,5 +111,32 @@ func (n *Notifier) postTimelapseToGuilds(frames []monitor.TimelapseFrame) {
 		} else {
 			log.Printf("Posted timelapse to guild %s", guild.ID)
 		}
+	}
+}
+
+func (n *Notifier) powerSaveFlagPath() string {
+	if n.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(n.dataDir, "power_save.flag")
+}
+
+func (n *Notifier) setPowerSaveFlag() {
+	path := n.powerSaveFlagPath()
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte("1\n"), 0644); err != nil {
+		log.Printf("Failed to write power-save flag: %v", err)
+	}
+}
+
+func (n *Notifier) clearPowerSaveFlag() {
+	path := n.powerSaveFlagPath()
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("Failed to remove power-save flag: %v", err)
 	}
 }

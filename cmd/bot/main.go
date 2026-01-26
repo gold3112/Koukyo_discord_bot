@@ -65,6 +65,13 @@ func main() {
 
 	// WebSocket監視の開始
 	powerSaveMode := os.Getenv("POWER_SAVE_MODE") == "1"
+	if !powerSaveMode {
+		flagPath := filepath.Join(dataDir, "power_save.flag")
+		if _, err := os.Stat(flagPath); err == nil {
+			log.Println("Power-save flag detected: enabling PowerSaveMode")
+			powerSaveMode = true
+		}
+	}
 	if cfg.WebSocketURL != "" {
 		globalMonitor = monitor.NewMonitor(cfg.WebSocketURL)
 		if powerSaveMode {
