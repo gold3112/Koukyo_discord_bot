@@ -164,7 +164,7 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 	}
 	if ms.TimelapseActive && data.DiffPercentage <= 0.2 {
 		ms.TimelapseActive = false
-		ms.LastTimelapseFrames = ms.collectTimelapseFrames()
+		ms.LastTimelapseFrames = ms.collectTimelapseFramesLocked()
 		now := time.Now()
 		ms.TimelapseCompletedAt = &now
 		ms.TimelapseFrames = nil
@@ -326,9 +326,8 @@ func (ms *MonitorState) GetDiffHistory(duration time.Duration, weighted bool) []
 	return out
 }
 
-func (ms *MonitorState) collectTimelapseFrames() []TimelapseFrame {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
+// collectTimelapseFramesLocked assumes ms.mu is already locked.
+func (ms *MonitorState) collectTimelapseFramesLocked() []TimelapseFrame {
 	if ms.TimelapseFrames == nil {
 		return nil
 	}
