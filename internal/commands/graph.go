@@ -255,20 +255,31 @@ func humanDuration(d time.Duration) string {
 }
 
 func buildDailyVandalCounts(dataDir string, days int) ([]string, []int, error) {
-	path := filepath.Join(dataDir, "user_activity.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("user_activity.jsonの読み込みに失敗しました: %w", err)
-	}
-	var raw map[string]*activity.UserActivity
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, fmt.Errorf("user_activity.jsonの解析に失敗しました: %w", err)
+	countsByDate := make(map[string]int)
+	dailyPath := filepath.Join(dataDir, "vandal_daily.json")
+	if data, err := os.ReadFile(dailyPath); err == nil {
+		var daily activity.DailyPixelCounts
+		if err := json.Unmarshal(data, &daily); err == nil && daily.Vandal != nil {
+			for dateKey, count := range daily.Vandal {
+				countsByDate[dateKey] += count
+			}
+		}
 	}
 
-	countsByDate := make(map[string]int)
-	for _, entry := range raw {
-		for dateKey, count := range entry.DailyVandalCounts {
-			countsByDate[dateKey] += count
+	if len(countsByDate) == 0 {
+		path := filepath.Join(dataDir, "user_activity.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("user_activity.jsonの読み込みに失敗しました: %w", err)
+		}
+		var raw map[string]*activity.UserActivity
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return nil, nil, fmt.Errorf("user_activity.jsonの解析に失敗しました: %w", err)
+		}
+		for _, entry := range raw {
+			for dateKey, count := range entry.DailyVandalCounts {
+				countsByDate[dateKey] += count
+			}
 		}
 	}
 

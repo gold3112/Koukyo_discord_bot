@@ -27,8 +27,17 @@ func (n *FixUserNotifier) Notify(user activity.UserActivity) {
 			continue
 		}
 		channelID := *gs.NotificationFixChannel
-		embed := buildUserNotifyEmbed("🛠️ 新規修復ユーザー検知", user, false)
+		embed, file := buildUserNotifyEmbed("🛠️ 新規修復ユーザー検知", user, false)
 		embed.Color = 0x2ECC71
+		if file != nil {
+			if _, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+				Embeds: []*discordgo.MessageEmbed{embed},
+				Files:  []*discordgo.File{file},
+			}); err != nil {
+				log.Printf("Failed to send fix user notification to guild %s: %v", guild.ID, err)
+			}
+			continue
+		}
 		if _, err := n.session.ChannelMessageSendEmbed(channelID, embed); err != nil {
 			log.Printf("Failed to send fix user notification to guild %s: %v", guild.ID, err)
 		}

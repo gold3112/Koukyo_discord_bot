@@ -40,7 +40,12 @@ type Pixel struct {
 type PaintedBy struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name"`
+	AllianceID   int    `json:"allianceId"`
 	AllianceName string `json:"allianceName"`
+	EquippedFlag int    `json:"equippedFlag"`
+	Picture      string `json:"picture"`
+	Discord      string `json:"discord"`
+	DiscordID    string `json:"discordId"`
 }
 
 type PixelAPIResponse struct {
@@ -56,6 +61,9 @@ type UserActivity struct {
 	ID                  string         `json:"id"`
 	Name                string         `json:"name"`
 	AllianceName        string         `json:"allianceName"`
+	Discord             string         `json:"discord,omitempty"`
+	DiscordID           string         `json:"discord_id,omitempty"`
+	Picture             string         `json:"picture,omitempty"`
 	LastSeen            string         `json:"last_seen"`
 	VandalCount         int            `json:"vandal_count"`
 	RestoredCount       int            `json:"restored_count"`
@@ -71,6 +79,11 @@ type VandalState struct {
 	PixelToPainter   map[string]string `json:"pixel_to_painter"`
 }
 
+type DailyPixelCounts struct {
+	Vandal map[string]int `json:"vandal"`
+	Fix    map[string]int `json:"fix"`
+}
+
 type Tracker struct {
 	cfg          Config
 	limiter      *utils.RateLimiter
@@ -78,6 +91,7 @@ type Tracker struct {
 	httpClient   *http.Client
 	newUserCB    NewUserCallback
 	queue        chan Pixel
+	pending      map[string]Pixel
 	diffQueue    chan []byte
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -85,6 +99,7 @@ type Tracker struct {
 	currentDiff  map[string]Pixel
 	activity     map[string]*UserActivity
 	vandalState  VandalState
+	dailyCounts  DailyPixelCounts
 	backoffDelay time.Duration
 	backoffUntil time.Time
 }
@@ -117,6 +132,7 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 		dataDir:      dataDir,
 		httpClient:   &http.Client{Transport: transport, Timeout: 8 * time.Second},
 		queue:        make(chan Pixel, queueSize),
+		pending:      make(map[string]Pixel),
 		diffQueue:    make(chan []byte, diffQueueSize),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -126,6 +142,7 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 		backoffDelay: 2 * time.Second,
 	}
 	t.loadState()
+	t.loadDailyCounts()
 	return t
 }
 
@@ -198,8 +215,21 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 		}
 	}
 	t.vandalState.VandalizedPixels = diffPixelsToList(newDiff)
+	added, removed := countDiffChanges(oldDiff, newDiff)
+	dateKey := dateKeyJST()
+	if t.dailyCounts.Vandal == nil {
+		t.dailyCounts.Vandal = make(map[string]int)
+	}
+	if t.dailyCounts.Fix == nil {
+		t.dailyCounts.Fix = make(map[string]int)
+	}
+	t.dailyCounts.Vandal[dateKey] += added
+	t.dailyCounts.Fix[dateKey] += removed
 	if err := t.saveVandalStateLocked(); err != nil {
 		log.Printf("failed to save vandal state: %v", err)
+	}
+	if err := t.saveDailyCountsLocked(); err != nil {
+		log.Printf("failed to save daily counts: %v", err)
 	}
 	t.mu.Unlock()
 
@@ -219,11 +249,7 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 	}
 
 	for _, px := range changes {
-		select {
-		case t.queue <- px:
-		default:
-			log.Printf("activity queue full; dropping pixel %d,%d", px.AbsX, px.AbsY)
-		}
+		t.enqueuePixel(px)
 	}
 
 	return nil
@@ -295,6 +321,15 @@ func (t *Tracker) processPixel(px Pixel) {
 			entry.AllianceName = painter.AllianceName
 		}
 	}
+	if painter.Discord != "" {
+		entry.Discord = painter.Discord
+	}
+	if painter.DiscordID != "" {
+		entry.DiscordID = painter.DiscordID
+	}
+	if painter.Picture != "" {
+		entry.Picture = painter.Picture
+	}
 
 	entry.LastSeen = now.Format(time.RFC3339Nano)
 	entry.LastPixel = &PixelRef{X: px.AbsX, Y: px.AbsY}
@@ -339,6 +374,10 @@ func (t *Tracker) processPixel(px Pixel) {
 	if shouldNotify && cb != nil {
 		cb(notifyKind, userCopy)
 	}
+
+	t.mu.Lock()
+	delete(t.pending, key)
+	t.mu.Unlock()
 }
 
 func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {
@@ -493,6 +532,25 @@ func (t *Tracker) loadState() {
 	}
 }
 
+func (t *Tracker) loadDailyCounts() {
+	path := filepath.Join(t.dataDir, "vandal_daily.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var counts DailyPixelCounts
+	if err := json.Unmarshal(data, &counts); err != nil {
+		return
+	}
+	if counts.Vandal == nil {
+		counts.Vandal = make(map[string]int)
+	}
+	if counts.Fix == nil {
+		counts.Fix = make(map[string]int)
+	}
+	t.dailyCounts = counts
+}
+
 func (t *Tracker) saveActivityLocked() error {
 	path := filepath.Join(t.dataDir, "user_activity.json")
 	payload, err := json.MarshalIndent(t.activity, "", "  ")
@@ -505,6 +563,15 @@ func (t *Tracker) saveActivityLocked() error {
 func (t *Tracker) saveVandalStateLocked() error {
 	path := filepath.Join(t.dataDir, "vandalized_pixels.json")
 	payload, err := json.MarshalIndent(t.vandalState, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, payload, 0644)
+}
+
+func (t *Tracker) saveDailyCountsLocked() error {
+	path := filepath.Join(t.dataDir, "vandal_daily.json")
+	payload, err := json.MarshalIndent(t.dailyCounts, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -546,6 +613,44 @@ func diffPixelsToList(diff map[string]Pixel) [][]int {
 		out = append(out, []int{px.AbsX, px.AbsY})
 	}
 	return out
+}
+
+func (t *Tracker) enqueuePixel(px Pixel) {
+	key := pixelKey(px.AbsX, px.AbsY)
+	t.mu.Lock()
+	if _, exists := t.pending[key]; exists {
+		t.mu.Unlock()
+		return
+	}
+	t.pending[key] = px
+	t.mu.Unlock()
+
+	select {
+	case <-t.ctx.Done():
+		t.mu.Lock()
+		delete(t.pending, key)
+		t.mu.Unlock()
+	case t.queue <- px:
+	}
+}
+
+func countDiffChanges(oldDiff, newDiff map[string]Pixel) (added, removed int) {
+	for key := range newDiff {
+		if _, ok := oldDiff[key]; !ok {
+			added++
+		}
+	}
+	for key := range oldDiff {
+		if _, ok := newDiff[key]; !ok {
+			removed++
+		}
+	}
+	return added, removed
+}
+
+func dateKeyJST() string {
+	jst := time.FixedZone("JST", 9*3600)
+	return time.Now().In(jst).Format("2006-01-02")
 }
 
 func pixelKey(x, y int) string {

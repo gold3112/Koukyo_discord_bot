@@ -3,9 +3,7 @@ package notifications
 import (
 	"Koukyo_discord_bot/internal/activity"
 	"Koukyo_discord_bot/internal/config"
-	"fmt"
 	"log"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -29,40 +27,18 @@ func (n *VandalUserNotifier) Notify(user activity.UserActivity) {
 			continue
 		}
 		channelID := *gs.NotificationVandalChannel
-		embed := buildUserNotifyEmbed("🚨 新規荒らしユーザー検知", user, true)
+		embed, file := buildUserNotifyEmbed("🚨 新規荒らしユーザー検知", user, true)
+		if file != nil {
+			if _, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+				Embeds: []*discordgo.MessageEmbed{embed},
+				Files:  []*discordgo.File{file},
+			}); err != nil {
+				log.Printf("Failed to send vandal user notification to guild %s: %v", guild.ID, err)
+			}
+			continue
+		}
 		if _, err := n.session.ChannelMessageSendEmbed(channelID, embed); err != nil {
 			log.Printf("Failed to send vandal user notification to guild %s: %v", guild.ID, err)
 		}
 	}
-}
-
-func buildUserNotifyEmbed(title string, user activity.UserActivity, isVandal bool) *discordgo.MessageEmbed {
-	name := user.Name
-	if name == "" {
-		name = fmt.Sprintf("ID:%s", user.ID)
-	}
-	alliance := user.AllianceName
-	if alliance == "" {
-		alliance = "-"
-	}
-	count := user.VandalCount
-	if !isVandal {
-		count = user.RestoredCount
-	}
-	lastSeen := user.LastSeen
-	if lastSeen == "" {
-		lastSeen = "-"
-	}
-	embed := &discordgo.MessageEmbed{
-		Title: title,
-		Color: 0xE74C3C,
-		Fields: []*discordgo.MessageEmbedField{
-			{Name: "ユーザー", Value: name, Inline: true},
-			{Name: "同盟", Value: alliance, Inline: true},
-			{Name: "累計", Value: fmt.Sprintf("%d", count), Inline: true},
-			{Name: "最終観測", Value: lastSeen, Inline: false},
-		},
-		Timestamp: time.Now().Format(time.RFC3339),
-	}
-	return embed
 }
