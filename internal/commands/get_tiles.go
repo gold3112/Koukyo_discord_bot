@@ -10,14 +10,21 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"time"
 )
+
+var tileHTTPClient = &http.Client{Timeout: 12 * time.Second}
 
 // downloadTile 単一のタイル画像をダウンロードするヘルパー関数
 func (c *GetCommand) downloadTile(ctx context.Context, tlx, tly int) ([]byte, error) {
 	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tlx, tly)
 
 	val, err := c.limiter.Do(ctx, "backend.wplace.live", func() (interface{}, error) {
-		resp, err := http.Get(url)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := tileHTTPClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("HTTP GET failed for %s: %w", url, err)
 		}
@@ -30,7 +37,11 @@ func (c *GetCommand) downloadTile(ctx context.Context, tlx, tly int) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	return val.([]byte), nil
+	data, ok := val.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tlx, tly)
+	}
+	return data, nil
 }
 
 // combineTiles 複数のタイル画像を結合するヘルパー関数

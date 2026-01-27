@@ -13,6 +13,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const monitorReadTimeout = 60 * time.Second
+
 // Monitor WebSocket監視クライアント
 type Monitor struct {
 	URL       string
@@ -49,13 +51,21 @@ func (m *Monitor) SetActivityTracker(tracker *activity.Tracker) {
 func (m *Monitor) Connect() error {
 	log.Printf("Connecting to WebSocket: %s", m.URL)
 
+	m.mu.Lock()
+	if m.conn != nil {
+		m.conn.Close()
+		m.conn = nil
+		m.connected = false
+	}
+	m.mu.Unlock()
+
 	conn, _, err := websocket.DefaultDialer.Dial(m.URL, nil)
 	if err != nil {
 		return err
 	}
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(monitorReadTimeout))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(monitorReadTimeout))
 		return nil
 	})
 
@@ -110,10 +120,17 @@ func (m *Monitor) receiveLoop() {
 				continue
 			}
 
-			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(monitorReadTimeout))
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("WebSocket read error: %v", err)
+				m.mu.Lock()
+				if m.conn == conn {
+					conn.Close()
+					m.conn = nil
+					m.connected = false
+				}
+				m.mu.Unlock()
 				// 再接続処理
 				time.Sleep(10 * time.Second)
 				if err := m.Connect(); err != nil {
@@ -289,20 +306,25 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 	payloadCopy := make([]byte, len(payload))
 	copy(payloadCopy, payload)
 
-	// 画像データを更新
-	m.mu.Lock()
-	if m.State.LatestImages == nil {
-		m.State.LatestImages = &ImageData{}
+	var current ImageData
+	m.State.mu.RLock()
+	if m.State.LatestImages != nil {
+		current = *m.State.LatestImages
 	}
+	powerSave := m.State.PowerSaveMode
+	m.State.mu.RUnlock()
 
+	updated := false
+	now := time.Now()
 	switch typeID {
 	case 2: // Live image
 		// 先頭に余分な00バイトがある場合は削除
 		if len(payloadCopy) > 0 && payloadCopy[0] == 0x00 {
 			payloadCopy = payloadCopy[1:]
 		}
-		m.State.LatestImages.LiveImage = payloadCopy
-		m.State.LatestImages.Timestamp = time.Now()
+		current.LiveImage = payloadCopy
+		current.Timestamp = now
+		updated = true
 		// 最初の16バイトをログに出力してフォーマットを確認
 		if len(payloadCopy) >= 16 {
 			log.Printf("Stored live image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
@@ -314,9 +336,10 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 		if len(payloadCopy) > 0 && payloadCopy[0] == 0x00 {
 			payloadCopy = payloadCopy[1:]
 		}
-		m.State.LatestImages.DiffImage = payloadCopy
-		m.State.LatestImages.Timestamp = time.Now()
-		if tracker != nil && !m.State.PowerSaveMode {
+		current.DiffImage = payloadCopy
+		current.Timestamp = now
+		updated = true
+		if tracker != nil && !powerSave {
 			tracker.EnqueueDiffImage(payloadCopy)
 		} else if tracker != nil {
 			log.Printf("activity tracker skipped: power_save_mode=true")
@@ -330,17 +353,12 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 	default:
 		log.Printf("Unknown binary type_id: %d", typeID)
 	}
-	var imagesCopy *ImageData
-	if m.State.LatestImages != nil {
-		imagesCopy = &ImageData{
-			LiveImage: append([]byte(nil), m.State.LatestImages.LiveImage...),
-			DiffImage: append([]byte(nil), m.State.LatestImages.DiffImage...),
-			Timestamp: m.State.LatestImages.Timestamp,
+	if updated {
+		imagesCopy := &ImageData{
+			LiveImage: append([]byte(nil), current.LiveImage...),
+			DiffImage: append([]byte(nil), current.DiffImage...),
+			Timestamp: current.Timestamp,
 		}
-	}
-	m.mu.Unlock()
-
-	if imagesCopy != nil {
 		m.State.UpdateImages(imagesCopy)
 	}
 
@@ -354,20 +372,18 @@ func (m *Monitor) GetLatestData() *MonitorData {
 
 // GetLatestImages 最新の画像データを取得
 func (m *Monitor) GetLatestImages() *ImageData {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.State.mu.RLock()
+	defer m.State.mu.RUnlock()
 
 	if m.State.LatestImages == nil {
 		return nil
 	}
 
-	// コピーを返す
-	images := &ImageData{
+	return &ImageData{
 		LiveImage: append([]byte(nil), m.State.LatestImages.LiveImage...),
 		DiffImage: append([]byte(nil), m.State.LatestImages.DiffImage...),
 		Timestamp: m.State.LatestImages.Timestamp,
 	}
-	return images
 }
 
 // Stop 監視を停止

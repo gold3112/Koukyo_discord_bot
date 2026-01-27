@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"strconv"
 	"strings"
+	"time"
 
 	"Koukyo_discord_bot/internal/utils"
 
@@ -67,9 +68,14 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 			return respondGet(s, i, fmt.Sprintf("❌ タイル座標が範囲外です: %d-%d 有効範囲: 0～2047", tileX, tileY))
 		}
 
-		imageData, err := c.downloadTile(context.Background(), tileX, tileY)
+		if err := respondDeferred(s, i); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		imageData, err := c.downloadTile(ctx, tileX, tileY)
+		cancel()
 		if err != nil {
-			return respondGet(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
+			return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 		}
 		latLng := utils.TilePixelToLngLat(tileX, tileY, utils.WplaceTileSize/2, utils.WplaceTileSize/2)
 		wplaceURL := utils.BuildWplaceURL(latLng.Lng, latLng.Lat, calculateZoomFromWH(utils.WplaceTileSize, utils.WplaceTileSize))
@@ -94,7 +100,7 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 				URL: "attachment://" + filename,
 			},
 		}
-		return sendImageWithEmbed(s, i, imageData, filename, embed)
+		return sendImageFollowup(s, i, imageData, filename, embed)
 	}
 
 	if region != "" {
@@ -124,7 +130,9 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		tilesData := make([][]byte, 0, gridCols*gridRows)
 		for ty := minTileY; ty <= maxTileY; ty++ {
 			for tx := minTileX; tx <= maxTileX; tx++ {
-				data, err := c.downloadTile(context.Background(), tx, ty)
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				data, err := c.downloadTile(ctx, tx, ty)
+				cancel()
 				if err != nil {
 					return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 				}
@@ -288,7 +296,9 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		tilesData := make([][]byte, 0, totalTiles)
 		for ty := 0; ty < tilesY; ty++ {
 			for tx := 0; tx < tilesX; tx++ {
-				data, err := c.downloadTile(context.Background(), startTileX+tx, startTileY+ty)
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				data, err := c.downloadTile(ctx, startTileX+tx, startTileY+ty)
+				cancel()
 				if err != nil {
 					return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 				}
