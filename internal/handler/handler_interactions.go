@@ -71,6 +71,14 @@ func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.Inte
 		commands.HandleUserListPagination(s, i, h.dataDir)
 		return
 	}
+	if strings.HasPrefix(customID, "useractivity:") {
+		commands.HandleUserActivityPagination(s, i, h.dataDir)
+		return
+	}
+	if customID == "useractivity_select" {
+		commands.HandleUserActivitySelect(s, i, h.dataDir)
+		return
+	}
 
 	log.Printf("Unknown message component: %s", customID)
 }
