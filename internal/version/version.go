@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "1.7.1-beta"
+	Version = "1.7.2-beta"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
@@ -10,6 +10,7 @@ const (
 
 // PatchNotes パッチノートの内容
 var PatchNotes = []string{
+	"ユーザー検索で初期アイコン特定機能を実装 (Thanks C20!)",
 	"user検索ができるように!",
 	"荒らしの検出精度を向上、また保存する内容の強化を行いました。",
 	"特定の条件下でデッドロックが発生する問題を修正しました。",

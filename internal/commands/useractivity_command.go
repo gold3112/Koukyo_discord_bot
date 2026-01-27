@@ -6,6 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +25,11 @@ const (
 	userActivitySelectPrefix  = "useractivity_select"
 	userActivityModeDetail    = "detail"
 	userActivityMaxSelectItems = 25
+	userActivityIconSize      = 160
+	userActivityColorsNb      = 9
+	userActivitySaturation    = 95
+	userActivityLightness     = 45
+	userActivityMagicNumber   = 5
 )
 
 type UserActivityCommand struct {
@@ -383,9 +392,9 @@ func buildUserActivityDetailEmbedFromEntry(kind string, entry userActivityEntry)
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	file := decodePictureDataURL(entry.Picture)
+	file := buildUserActivityImageFile(entry)
 	if file != nil {
-		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{
+		embed.Image = &discordgo.MessageEmbedImage{
 			URL: "attachment://" + file.Name,
 		}
 	}
@@ -576,6 +585,33 @@ func buildOptionalFiles(file *discordgo.File) []*discordgo.File {
 	return []*discordgo.File{file}
 }
 
+func buildUserActivityImageFile(entry userActivityEntry) *discordgo.File {
+	if entry.Picture != "" {
+		if file := decodePictureDataURL(entry.Picture); file != nil {
+			return file
+		}
+	}
+	seed := entry.DiscordID
+	if seed == "" {
+		seed = entry.ID
+	}
+	if seed == "" {
+		seed = entry.Discord
+	}
+	if seed == "" {
+		return nil
+	}
+	data, err := buildIdenticonPNG(seed, userActivityIconSize)
+	if err != nil {
+		return nil
+	}
+	return &discordgo.File{
+		Name:        "user_identicon.png",
+		ContentType: "image/png",
+		Reader:      bytes.NewReader(data),
+	}
+}
+
 func buildUserActivitySearchEmbed(query string, entries []userActivityEntry) (*discordgo.MessageEmbed, []discordgo.MessageComponent) {
 	limit := len(entries)
 	if limit > userActivityMaxSelectItems {
@@ -633,4 +669,100 @@ func truncateLabel(value string, max int) string {
 		return value[:max]
 	}
 	return value[:max-3] + "..."
+}
+
+func buildIdenticonPNG(seed string, size int) ([]byte, error) {
+	if size <= 0 {
+		size = userActivityIconSize
+	}
+	hash := simpleHash(seed)
+	hue := float64(hash%userActivityColorsNb) * (360.0 / float64(userActivityColorsNb))
+	r, g, b := hslToRGB(hue, float64(userActivitySaturation), float64(userActivityLightness))
+	fill := color.RGBA{R: r, G: g, B: b, A: 0xFF}
+
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	cell := size / 5
+	if cell <= 0 {
+		cell = 1
+	}
+	for i := 0; i < 25; i++ {
+		if (hash & (1 << (i % 15))) == 0 {
+			continue
+		}
+		x := i / 5
+		if i > 14 {
+			x = 7 - x
+		}
+		y := i % 5
+		startX := x * cell
+		startY := y * cell
+		for py := startY; py < startY+cell && py < size; py++ {
+			for px := startX; px < startX+cell && px < size; px++ {
+				img.Set(px, py, fill)
+			}
+		}
+	}
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func simpleHash(value string) uint32 {
+	hash := int32(userActivityMagicNumber)
+	for _, r := range value {
+		hash = (hash ^ int32(r)) * -userActivityMagicNumber
+	}
+	return uint32(hash) >> 2
+}
+
+func hslToRGB(h, s, l float64) (uint8, uint8, uint8) {
+	h = math.Mod(h, 360) / 360.0
+	s = clamp01(s / 100.0)
+	l = clamp01(l / 100.0)
+	if s == 0 {
+		v := uint8(math.Round(l * 255))
+		return v, v, v
+	}
+	var q float64
+	if l < 0.5 {
+		q = l * (1 + s)
+	} else {
+		q = l + s - l*s
+	}
+	p := 2*l - q
+	r := hueToRGB(p, q, h+1.0/3.0)
+	g := hueToRGB(p, q, h)
+	b := hueToRGB(p, q, h-1.0/3.0)
+	return uint8(math.Round(r * 255)), uint8(math.Round(g * 255)), uint8(math.Round(b * 255))
+}
+
+func hueToRGB(p, q, t float64) float64 {
+	if t < 0 {
+		t += 1
+	}
+	if t > 1 {
+		t -= 1
+	}
+	switch {
+	case t < 1.0/6.0:
+		return p + (q-p)*6*t
+	case t < 1.0/2.0:
+		return q
+	case t < 2.0/3.0:
+		return p + (q-p)*(2.0/3.0-t)*6
+	default:
+		return p
+	}
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
