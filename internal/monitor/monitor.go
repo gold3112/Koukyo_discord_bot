@@ -116,7 +116,11 @@ func (m *Monitor) receiveLoop() {
 			m.mu.RUnlock()
 
 			if conn == nil {
-				time.Sleep(5 * time.Second)
+				// Attempt reconnect while disconnected.
+				if err := m.Connect(); err != nil {
+					log.Printf("Reconnect failed: %v", err)
+					time.Sleep(10 * time.Second)
+				}
 				continue
 			}
 
@@ -131,6 +135,9 @@ func (m *Monitor) receiveLoop() {
 					m.connected = false
 				}
 				m.mu.Unlock()
+				m.lastMu.Lock()
+				m.lastMsgAt = time.Time{}
+				m.lastMu.Unlock()
 				// 再接続処理
 				time.Sleep(10 * time.Second)
 				if err := m.Connect(); err != nil {
@@ -220,6 +227,9 @@ func (m *Monitor) idleWatchLoop() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
+			if !m.IsConnected() {
+				continue
+			}
 			m.lastMu.Lock()
 			last := m.lastMsgAt
 			m.lastMu.Unlock()

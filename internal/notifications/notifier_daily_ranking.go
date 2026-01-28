@@ -163,7 +163,7 @@ func formatRanking(entries []rankingEntry) string {
 	lines := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
 		entry := entries[i]
-		display := entry.Name
+		display := formatUserDisplayName(entry.Name, entry.ID)
 		if entry.Alliance != "" {
 			display = fmt.Sprintf("%s (%s)", display, entry.Alliance)
 		}
@@ -210,7 +210,7 @@ func formatActivityRanking(entries []rankingEntry) string {
 	lines := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
 		entry := entries[i]
-		display := entry.Name
+		display := formatUserDisplayName(entry.Name, entry.ID)
 		if entry.Alliance != "" {
 			display = fmt.Sprintf("%s (%s)", display, entry.Alliance)
 		}

@@ -1,8 +1,10 @@
 package notifications
 
 import (
+	"bytes"
 	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/monitor"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -86,16 +88,44 @@ func (n *Notifier) postTimelapseToGuilds(frames []monitor.TimelapseFrame) {
 		log.Printf("Failed to build timelapse GIF: %v", err)
 		return
 	}
+	if gifBuf.Len() == 0 {
+		log.Printf("Failed to build timelapse GIF: empty buffer")
+		return
+	}
+	frameCount := len(frames)
+	startTime := frames[0].Timestamp
+	endTime := frames[frameCount-1].Timestamp
+	duration := endTime.Sub(startTime)
+	jst := time.FixedZone("JST", 9*3600)
+
 	// 投稿対象ギルド
 	for _, guild := range n.session.State.Guilds {
 		gs := n.settings.GetGuildSettings(guild.ID)
 		if !gs.AutoNotifyEnabled || gs.NotificationChannel == nil {
 			continue
 		}
+		reader := bytes.NewReader(gifBuf.Bytes())
 		embed := &discordgo.MessageEmbed{
 			Title:       "📽️ タイムラプス完了",
 			Description: "差分率 30%→0.2% の期間を自動生成しました",
 			Color:       0x00AA88,
+			Fields: []*discordgo.MessageEmbedField{
+				{
+					Name:   "期間",
+					Value:  fmt.Sprintf("%s ～ %s (JST)", startTime.In(jst).Format("2006-01-02 15:04:05"), endTime.In(jst).Format("2006-01-02 15:04:05")),
+					Inline: false,
+				},
+				{
+					Name:   "フレーム数",
+					Value:  fmt.Sprintf("%d", frameCount),
+					Inline: true,
+				},
+				{
+					Name:   "生成時間",
+					Value:  fmt.Sprintf("%.1f秒", duration.Seconds()),
+					Inline: true,
+				},
+			},
 			Timestamp:   time.Now().Format(time.RFC3339),
 		}
 		_, err := n.session.ChannelMessageSendComplex(*gs.NotificationChannel, &discordgo.MessageSend{
@@ -103,7 +133,7 @@ func (n *Notifier) postTimelapseToGuilds(frames []monitor.TimelapseFrame) {
 			Files: []*discordgo.File{{
 				Name:        "timelapse.gif",
 				ContentType: "image/gif",
-				Reader:      gifBuf,
+				Reader:      reader,
 			}},
 		})
 		if err != nil {

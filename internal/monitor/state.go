@@ -48,6 +48,8 @@ type MonitorState struct {
 	LatestImages        *ImageData
 	DiffHistory         *ring.Ring
 	WeightedDiffHistory *ring.Ring
+	DiffHistoryCount    int
+	WeightedHistoryCount int
 	ReferencePixels     ReferencePixels
 	PowerSaveMode       bool
 	PowerSaveRestart    bool
@@ -74,10 +76,11 @@ type DiffRecord struct {
 	Percentage float64
 }
 
-// TimelapseFrame タイムラプスのフレーム（差分画像を保持）
+// TimelapseFrame タイムラプスのフレーム（差分/ライブ画像を保持）
 type TimelapseFrame struct {
 	Timestamp time.Time
 	DiffPNG   []byte
+	LivePNG   []byte
 }
 
 // ReferencePixels 基準ピクセル数
@@ -143,6 +146,9 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 			Percentage: data.DiffPercentage,
 		}
 		ms.DiffHistory = ms.DiffHistory.Next()
+		if ms.DiffHistoryCount < historyLimit {
+			ms.DiffHistoryCount++
+		}
 
 		if data.WeightedDiffPercentage != nil {
 			ms.WeightedDiffHistory.Value = DiffRecord{
@@ -150,6 +156,9 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 				Percentage: *data.WeightedDiffPercentage,
 			}
 			ms.WeightedDiffHistory = ms.WeightedDiffHistory.Next()
+			if ms.WeightedHistoryCount < historyLimit {
+				ms.WeightedHistoryCount++
+			}
 		}
 	}
 
@@ -161,11 +170,19 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 		ms.TimelapseStartTime = &now
 		ms.TimelapseCompletedAt = nil
 		ms.lastTimelapseCapture = nil
+		if ms.LatestImages != nil && len(ms.LatestImages.DiffImage) > 0 {
+			ms.addTimelapseFrameLocked(ms.LatestImages.LiveImage, ms.LatestImages.DiffImage, now)
+		}
 	}
 	if ms.TimelapseActive && data.DiffPercentage <= 0.2 {
+		now := time.Now()
+		if ms.LatestImages != nil && len(ms.LatestImages.DiffImage) > 0 {
+			if ms.lastTimelapseCapture == nil || now.Sub(*ms.lastTimelapseCapture) >= 10*time.Second {
+				ms.addTimelapseFrameLocked(ms.LatestImages.LiveImage, ms.LatestImages.DiffImage, now)
+			}
+		}
 		ms.TimelapseActive = false
 		ms.LastTimelapseFrames = ms.collectTimelapseFramesLocked()
-		now := time.Now()
 		ms.TimelapseCompletedAt = &now
 		ms.TimelapseFrames = nil
 		ms.TimelapseStartTime = nil
@@ -182,13 +199,7 @@ func (ms *MonitorState) UpdateImages(images *ImageData) {
 	if ms.TimelapseActive && images != nil && len(images.DiffImage) > 0 {
 		now := time.Now()
 		if ms.lastTimelapseCapture == nil || now.Sub(*ms.lastTimelapseCapture) >= 10*time.Second {
-			diffCopy := append([]byte(nil), images.DiffImage...)
-			ms.TimelapseFrames.Value = TimelapseFrame{
-				Timestamp: now,
-				DiffPNG:   diffCopy,
-			}
-			ms.TimelapseFrames = ms.TimelapseFrames.Next()
-			ms.lastTimelapseCapture = &now
+			ms.addTimelapseFrameLocked(images.LiveImage, images.DiffImage, now)
 		}
 	}
 	ms.mu.Unlock()
@@ -326,6 +337,13 @@ func (ms *MonitorState) GetDiffHistory(duration time.Duration, weighted bool) []
 	return out
 }
 
+// GetDiffHistoryCount returns the number of stored diff records (capped at historyLimit).
+func (ms *MonitorState) GetDiffHistoryCount() int {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return ms.DiffHistoryCount
+}
+
 // collectTimelapseFramesLocked assumes ms.mu is already locked.
 func (ms *MonitorState) collectTimelapseFramesLocked() []TimelapseFrame {
 	if ms.TimelapseFrames == nil {
@@ -353,6 +371,24 @@ func isZeroDiff(value float64) bool {
 func (ms *MonitorState) resetDiffHistoryLocked() {
 	ms.DiffHistory = ring.New(historyLimit)
 	ms.WeightedDiffHistory = ring.New(historyLimit)
+	ms.DiffHistoryCount = 0
+	ms.WeightedHistoryCount = 0
+}
+
+// addTimelapseFrameLocked assumes ms.mu is already locked.
+func (ms *MonitorState) addTimelapseFrameLocked(liveImage, diffImage []byte, now time.Time) {
+	if ms.TimelapseFrames == nil || len(diffImage) == 0 {
+		return
+	}
+	diffCopy := append([]byte(nil), diffImage...)
+	liveCopy := append([]byte(nil), liveImage...)
+	ms.TimelapseFrames.Value = TimelapseFrame{
+		Timestamp: now,
+		DiffPNG:   diffCopy,
+		LivePNG:   liveCopy,
+	}
+	ms.TimelapseFrames = ms.TimelapseFrames.Next()
+	ms.lastTimelapseCapture = &now
 }
 
 // GetLastTimelapseFrames 直近完了したタイムラプスのフレームを取得

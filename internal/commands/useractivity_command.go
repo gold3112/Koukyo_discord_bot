@@ -351,10 +351,7 @@ func buildUserActivityDetailEmbed(dataDir, kind, listType string, page int) (*di
 }
 
 func buildUserActivityDetailEmbedFromEntry(kind string, entry userActivityEntry) (*discordgo.MessageEmbed, *discordgo.File) {
-	name := entry.Name
-	if name == "" {
-		name = fmt.Sprintf("ID:%s", entry.ID)
-	}
+	name := formatUserDisplayName(entry.Name, entry.ID)
 	alliance := entry.Alliance
 	if alliance == "" {
 		alliance = "-"
@@ -621,15 +618,12 @@ func buildUserActivitySearchEmbed(query string, entries []userActivityEntry) (*d
 	lines := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
 		entry := entries[i]
-		name := entry.Name
-		if name == "" {
-			name = fmt.Sprintf("ID:%s", entry.ID)
-		}
+		name := formatUserDisplayName(entry.Name, entry.ID)
 		discordName := entry.Discord
 		if discordName == "" {
 			discordName = "-"
 		}
-		label := fmt.Sprintf("%s (%s)", discordName, entry.ID)
+		label := fmt.Sprintf("%s (%s)", discordName, name)
 		options = append(options, discordgo.SelectMenuOption{
 			Label:       truncateLabel(label, 100),
 			Value:       entry.ID,

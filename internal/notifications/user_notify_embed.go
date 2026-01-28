@@ -12,10 +12,7 @@ import (
 )
 
 func buildUserNotifyEmbed(title string, user activity.UserActivity, isVandal bool) (*discordgo.MessageEmbed, *discordgo.File) {
-	name := user.Name
-	if name == "" {
-		name = fmt.Sprintf("ID:%s", user.ID)
-	}
+	name := formatUserDisplayName(user.Name, user.ID)
 	alliance := user.AllianceName
 	if alliance == "" {
 		alliance = "-"
@@ -57,6 +54,21 @@ func buildUserNotifyEmbed(title string, user activity.UserActivity, isVandal boo
 		}
 	}
 	return embed, file
+}
+
+func formatUserDisplayName(name, id string) string {
+	name = strings.TrimSpace(name)
+	id = strings.TrimSpace(id)
+	switch {
+	case name != "" && id != "":
+		return fmt.Sprintf("%s#%s", name, id)
+	case name != "":
+		return name
+	case id != "":
+		return fmt.Sprintf("ID:%s", id)
+	default:
+		return "-"
+	}
 }
 
 func decodePictureDataURL(value string) *discordgo.File {

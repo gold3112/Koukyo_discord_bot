@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "1.7.2-beta"
+	Version = "1.7.3-beta"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
@@ -10,11 +10,9 @@ const (
 
 // PatchNotes パッチノートの内容
 var PatchNotes = []string{
-	"ユーザー検索で初期アイコン特定機能を実装 (Thanks C20!)",
-	"user検索ができるように!",
-	"荒らしの検出精度を向上、また保存する内容の強化を行いました。",
-	"特定の条件下でデッドロックが発生する問題を修正しました。",
-	"荒らし・修復のユーザー追跡をスコア形式として、正負の値で表すように変更しました。",
-	"差分率が下がったときのロジックを実装しました。",
+	"2026/01/29更新",
+	"ユーザーの表示でidを明確に表示",
+	"タイムラプスの生成を改善",
+	"websockets関連の修正",
 	"--現在移植中!!!--",
 }
