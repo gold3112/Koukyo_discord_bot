@@ -368,7 +368,8 @@ func BuildStatusEmbed(botInfo *models.BotInfo, session *discordgo.Session) *disc
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	allocMB := float64(m.Alloc) / 1024 / 1024
-	totalMB := float64(m.TotalAlloc) / 1024 / 1024
+	heapAllocMB := float64(m.HeapAlloc) / 1024 / 1024
+	heapInuseMB := float64(m.HeapInuse) / 1024 / 1024
 	sysMB := float64(m.Sys) / 1024 / 1024
 
 	embed := &discordgo.MessageEmbed{
@@ -388,7 +389,7 @@ func BuildStatusEmbed(botInfo *models.BotInfo, session *discordgo.Session) *disc
 			},
 			{
 				Name:   "💾 メモリ使用量",
-				Value:  fmt.Sprintf("確保: %.2f MB\n総確保: %.2f MB\nシステム: %.2f MB", allocMB, totalMB, sysMB),
+				Value:  fmt.Sprintf("Alloc: %.2f MB\nHeapAlloc: %.2f MB\nHeapInuse: %.2f MB\nSys: %.2f MB", allocMB, heapAllocMB, heapInuseMB, sysMB),
 				Inline: false,
 			},
 			{

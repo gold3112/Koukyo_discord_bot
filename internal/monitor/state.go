@@ -66,6 +66,11 @@ type MonitorState struct {
 	HeatmapCounts  []uint32
 	HeatmapSourceW int
 	HeatmapSourceH int
+	// Daily peak tracking (JST)
+	DailyPeakDate      string
+	DailyPeakDiff      float64
+	DailyPeakAt        time.Time
+	DailyPeakDiffImage []byte
 	mu             sync.RWMutex
 }
 
@@ -191,6 +196,28 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 func (ms *MonitorState) UpdateImages(images *ImageData) {
 	ms.mu.Lock()
 	ms.LatestImages = images
+
+	// Daily peak tracking (JST)
+	if images != nil && len(images.DiffImage) > 0 && ms.LatestData != nil {
+		jst := time.FixedZone("JST", 9*3600)
+		ts := ms.LatestData.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		dateKey := ts.In(jst).Format("2006-01-02")
+		if dateKey != ms.DailyPeakDate {
+			ms.DailyPeakDate = dateKey
+			ms.DailyPeakDiff = 0
+			ms.DailyPeakAt = time.Time{}
+			ms.DailyPeakDiffImage = nil
+		}
+		if ms.DailyPeakDiffImage == nil || ms.LatestData.DiffPercentage >= ms.DailyPeakDiff {
+			diffCopy := append([]byte(nil), images.DiffImage...)
+			ms.DailyPeakDiffImage = diffCopy
+			ms.DailyPeakDiff = ms.LatestData.DiffPercentage
+			ms.DailyPeakAt = ts
+		}
+	}
 
 	// タイムラプス中で、diff画像があり、一定間隔ごとにフレームを追加
 	if ms.TimelapseActive && images != nil && len(images.DiffImage) > 0 {
@@ -437,4 +464,15 @@ func (ms *MonitorState) GetHeatmapSnapshot() (counts []uint32, gridW, gridH, src
 	cp := make([]uint32, len(ms.HeatmapCounts))
 	copy(cp, ms.HeatmapCounts)
 	return cp, ms.HeatmapGridW, ms.HeatmapGridH, ms.HeatmapSourceW, ms.HeatmapSourceH
+}
+
+// GetDailyPeakDiffImage returns the diff image captured at the daily peak (JST).
+func (ms *MonitorState) GetDailyPeakDiffImage(dateKey string) (img []byte, peakAt time.Time, peakValue float64, ok bool) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	if ms.DailyPeakDate != dateKey || len(ms.DailyPeakDiffImage) == 0 {
+		return nil, time.Time{}, 0, false
+	}
+	cp := append([]byte(nil), ms.DailyPeakDiffImage...)
+	return cp, ms.DailyPeakAt, ms.DailyPeakDiff, true
 }
