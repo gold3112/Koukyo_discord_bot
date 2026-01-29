@@ -304,6 +304,31 @@ func (ms *MonitorState) GetLatestData() *MonitorData {
 	return &data
 }
 
+// IsPowerSaveMode reports whether power-save mode is enabled.
+func (ms *MonitorState) IsPowerSaveMode() bool {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return ms.PowerSaveMode
+}
+
+// SetPowerSaveMode updates the power-save mode flag.
+func (ms *MonitorState) SetPowerSaveMode(enabled bool) {
+	ms.mu.Lock()
+	ms.PowerSaveMode = enabled
+	ms.mu.Unlock()
+}
+
+// GetTimelapseCompletedAt returns a copy of the last timelapse completion time.
+func (ms *MonitorState) GetTimelapseCompletedAt() *time.Time {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	if ms.TimelapseCompletedAt == nil {
+		return nil
+	}
+	t := *ms.TimelapseCompletedAt
+	return &t
+}
+
 // GetDiffHistory 期間内の差分履歴を取得
 func (ms *MonitorState) GetDiffHistory(duration time.Duration, weighted bool) []DiffRecord {
 	ms.mu.RLock()

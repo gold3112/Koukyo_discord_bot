@@ -86,7 +86,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		return
 	}
 
-	if n.monitor.State.PowerSaveMode {
+	if n.monitor.State.IsPowerSaveMode() {
 		return
 	}
 

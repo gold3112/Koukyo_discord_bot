@@ -69,7 +69,7 @@ func main() {
 		globalMonitor = monitor.NewMonitor(cfg.WebSocketURL)
 		if powerSaveMode {
 			log.Println("Power-save mode enabled: setting PowerSaveMode on monitor state")
-			globalMonitor.State.PowerSaveMode = true
+			globalMonitor.State.SetPowerSaveMode(true)
 		}
 		globalMonitor.SetActivityTracker(activityTracker)
 

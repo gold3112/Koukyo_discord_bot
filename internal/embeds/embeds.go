@@ -232,7 +232,23 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 	}
 
 	// データがある場合
-	data := mon.State.LatestData
+	data := mon.GetLatestData()
+	if data == nil {
+		embed := &discordgo.MessageEmbed{
+			Title:       "🏯 Wplace 監視情報",
+			Description: "**現在の監視状況**",
+			Color:       0x3498DB,
+			Fields: []*discordgo.MessageEmbedField{
+				{
+					Name:   "📡 監視ステータス",
+					Value:  "🔄 準備中（データ受信待機中）",
+					Inline: false,
+				},
+			},
+			Timestamp: now.UTC().Format(time.RFC3339),
+		}
+		return embed
+	}
 
 	// 差分率の表示
 	diffValue := fmt.Sprintf("%.2f%%", data.DiffPercentage)
@@ -302,7 +318,7 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 	}
 
 	// 省電力モードの表示
-	if mon.State.PowerSaveMode {
+	if mon.State.IsPowerSaveMode() {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "💤 省電力モード",
 			Value:  "差分率0%を10分以上維持したため、画像更新を停止しています。",

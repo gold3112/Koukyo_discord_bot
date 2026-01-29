@@ -40,10 +40,10 @@ func (h *Handler) SendStartupNotification(s *discordgo.Session) {
 		}
 
 		// 省電力モード通知（環境変数で判定）
-		if h.monitor != nil && h.monitor.State.PowerSaveMode {
+		if h.monitor != nil && h.monitor.State.IsPowerSaveMode() {
 			powerSaveEmbed := &discordgo.MessageEmbed{
 				Title:       "🌙 省電力モード",
-				Description: "差分率0%が継続したため、省電力モードに切り替える再起動を行いました。更新を一時停止しています。",
+				Description: "差分率0%が継続したため、省電力モードに切り替えました。更新を一時停止しています。",
 				Color:       0x888888,
 				Footer:      &discordgo.MessageEmbedFooter{Text: "差分が検出されると通常運転に戻ります"},
 			}

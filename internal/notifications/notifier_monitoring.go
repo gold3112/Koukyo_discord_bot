@@ -24,7 +24,7 @@ func (n *Notifier) StartMonitoring() {
 				continue
 			}
 
-			currentPowerSave := n.monitor.State.PowerSaveMode
+			currentPowerSave := n.monitor.State.IsPowerSaveMode()
 			if n.lastPowerSaveMode && !currentPowerSave {
 				n.notifyPowerSaveResume()
 			}
@@ -41,7 +41,7 @@ func (n *Notifier) StartMonitoring() {
 			}
 
 			// タイムラプス完了の自動投稿
-			t := n.monitor.State.TimelapseCompletedAt
+			t := n.monitor.State.GetTimelapseCompletedAt()
 			if t != nil && (n.lastTimelapseCompletedAt == nil || t.After(*n.lastTimelapseCompletedAt)) {
 				frames := n.monitor.State.GetLastTimelapseFrames()
 				if len(frames) > 0 {
