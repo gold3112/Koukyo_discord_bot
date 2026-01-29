@@ -355,17 +355,9 @@ func BuildStatusEmbed(botInfo *models.BotInfo, session *discordgo.Session) *disc
 	totalMB := float64(m.TotalAlloc) / 1024 / 1024
 	sysMB := float64(m.Sys) / 1024 / 1024
 
-	// 次回再起動予定時刻（24時間ごと）
-	nextRestart := botInfo.StartTime.Add(24 * time.Hour)
-	timeUntilRestart := time.Until(nextRestart)
-	if timeUntilRestart < 0 {
-		nextRestart = nextRestart.Add(24 * time.Hour)
-		timeUntilRestart = time.Until(nextRestart)
-	}
-
 	embed := &discordgo.MessageEmbed{
 		Title:       "🤖 Bot ステータス",
-		Description: "Bot自体のステータス（稼働時間、メモリ、次回再起動まで）",
+		Description: "Bot自体のステータス（稼働時間、メモリ）",
 		Color:       0x2ECC71, // Green
 		Fields: []*discordgo.MessageEmbedField{
 			{
@@ -377,11 +369,6 @@ func BuildStatusEmbed(botInfo *models.BotInfo, session *discordgo.Session) *disc
 				Name:   "🕐 起動時刻",
 				Value:  botInfo.StartTime.Format("2006-01-02 15:04:05"),
 				Inline: true,
-			},
-			{
-				Name:   "🔄 次回再起動",
-				Value:  fmt.Sprintf("%s\n(あと %s)", nextRestart.Format("2006-01-02 15:04:05"), formatUptime(timeUntilRestart)),
-				Inline: false,
 			},
 			{
 				Name:   "💾 メモリ使用量",
