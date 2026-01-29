@@ -11,6 +11,19 @@
             { "reply": "https://gold3112.online/for-bot/endless-boom.gif", "weight": 0.1 }
         ]
     },
+    "sin": {
+        "aliases": [
+            "sin",
+            "サイン",
+            "シン",
+            "しん"
+        ],
+        "choices": [
+            { "reply": "SINはワッカだ", "weight": 0.1 },
+            { "reply": "激務", "weight": 1 },
+            { "reply": "なでなで", "weight": 1 }
+        ]
+    },
     "kuma": {
         "choices": [
             { "reply": "「戦場のリョナリスト」", "weight": 1 },
