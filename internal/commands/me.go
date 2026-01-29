@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"strings"
@@ -147,13 +148,33 @@ func buildMeCardEmbed(entry userActivityEntry, user *discordgo.User) (*discordgo
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	file := buildUserActivityImageFile(entry)
+	file := buildMeCardImageFile(entry)
 	if file != nil {
 		embed.Image = &discordgo.MessageEmbedImage{
 			URL: "attachment://" + file.Name,
 		}
 	}
 	return embed, file
+}
+
+func buildMeCardImageFile(entry userActivityEntry) *discordgo.File {
+	if entry.Picture != "" {
+		if file := decodePictureDataURL(entry.Picture); file != nil {
+			return file
+		}
+	}
+	if entry.ID == "" {
+		return nil
+	}
+	data, err := buildIdenticonPNG(entry.ID, userActivityIconSize)
+	if err != nil {
+		return nil
+	}
+	return &discordgo.File{
+		Name:        "user_identicon.png",
+		ContentType: "image/png",
+		Reader:      bytes.NewReader(data),
+	}
 }
 
 func discordTag(user *discordgo.User) string {

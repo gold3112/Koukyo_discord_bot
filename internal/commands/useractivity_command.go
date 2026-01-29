@@ -669,15 +669,15 @@ func buildIdenticonPNG(seed string, size int) ([]byte, error) {
 	if size <= 0 {
 		size = userActivityIconSize
 	}
-	hash := simpleHash(seed)
+	hash := simpleHashJS(seed)
 	hue := float64(hash%userActivityColorsNb) * (360.0 / float64(userActivityColorsNb))
 	r, g, b := hslToRGB(hue, float64(userActivitySaturation), float64(userActivityLightness))
 	fill := color.RGBA{R: r, G: g, B: b, A: 0xFF}
 
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	cell := size / 5
-	if cell <= 0 {
-		cell = 1
+	unit := float64(size) / 8.0
+	if unit <= 0 {
+		unit = 1
 	}
 	for i := 0; i < 25; i++ {
 		if (hash & (1 << (i % 15))) == 0 {
@@ -688,10 +688,30 @@ func buildIdenticonPNG(seed string, size int) ([]byte, error) {
 			x = 7 - x
 		}
 		y := i % 5
-		startX := x * cell
-		startY := y * cell
-		for py := startY; py < startY+cell && py < size; py++ {
-			for px := startX; px < startX+cell && px < size; px++ {
+		x0 := int(math.Floor((float64(x)+1.5) * unit))
+		y0 := int(math.Floor((float64(y)+1.5) * unit))
+		x1 := int(math.Floor((float64(x)+2.5) * unit))
+		y1 := int(math.Floor((float64(y)+2.5) * unit))
+		if x1 <= x0 {
+			x1 = x0 + 1
+		}
+		if y1 <= y0 {
+			y1 = y0 + 1
+		}
+		if x0 < 0 {
+			x0 = 0
+		}
+		if y0 < 0 {
+			y0 = 0
+		}
+		if x1 > size {
+			x1 = size
+		}
+		if y1 > size {
+			y1 = size
+		}
+		for py := y0; py < y1; py++ {
+			for px := x0; px < x1; px++ {
 				img.Set(px, py, fill)
 			}
 		}
@@ -703,10 +723,19 @@ func buildIdenticonPNG(seed string, size int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func simpleHash(value string) uint32 {
+func simpleHashJS(value string) uint32 {
 	hash := int32(userActivityMagicNumber)
 	for _, r := range value {
-		hash = (hash ^ int32(r)) * -userActivityMagicNumber
+		if r <= 0xFFFF {
+			hash = (hash ^ int32(r)) * -userActivityMagicNumber
+			continue
+		}
+		// UTF-16 surrogate pair
+		r -= 0x10000
+		high := int32((r>>10)&0x3FF + 0xD800)
+		low := int32((r&0x3FF) + 0xDC00)
+		hash = (hash ^ high) * -userActivityMagicNumber
+		hash = (hash ^ low) * -userActivityMagicNumber
 	}
 	return uint32(hash) >> 2
 }
