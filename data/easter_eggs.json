@@ -1,4 +1,21 @@
 {
+    "1amglad": {
+        "aliases": [
+            "1amglad",
+            "Iamglad",
+            "iamglad",
+            "glad",
+            "いちあむぐらっど",
+            "ぐらっど",
+            "グラッド",
+            "アイアムグラッド",
+            "あいあむぐらっど"
+        ],
+        "choices": [
+            { "reply": "支持します✋", "weight": 1 },
+            { "reply": "指示します🫵", "weight": 0.1 }
+        ]
+    },
     "endless": {
         "aliases": [
             "エンドレス"
@@ -9,6 +26,18 @@
             { "reply": "元幼女", "weight": 1 },
             { "reply": "Placerだぁ！", "weight": 1 },
             { "reply": "https://gold3112.online/for-bot/endless-boom.gif", "weight": 0.1 }
+        ]
+    },
+    "destroyboard": {
+        "aliases": [
+            "destroyboard",
+            "デストロイボード",
+            "デストロイ・ボード"
+        ],
+        "choices": [
+            { "reply": "LOVE U TEN", "weight": 1 },
+            { "reply": "LOVE U ENDLESS", "weight": 1 },
+            { "reply": "LOVE YOU RENGE", "weight": 1 }
         ]
     },
     "sin": {
@@ -83,6 +112,25 @@
             { "reply": "あ、そういうノリ😅", "weight": 1 },
             { "reply": "うおｗ😅", "weight": 1 }
         ]
+    },
+    "placer": {
+        "aliases": [
+            "placer",
+            "Placer",
+            "PLACER",
+            "ぷれいさー",
+            "プレイサー"
+        ],
+        "repoly": "# 我々はこの土地を必ず破壊します。(迫真)"
+    },
+    "DyB": {
+        "aliases": [
+            "dyb",
+            "DyB",
+            "DsB",
+            "Dsb"
+        ],
+        "repoly": "SyBと同じにするな、無礼者め。"
     },
     "s.bm": "-# ???「(´-`).｡oO(貴方たちの生死は私にかかっています...。)」",
     "工口":"工口あるよ(笑)",
