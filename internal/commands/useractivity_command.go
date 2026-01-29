@@ -588,12 +588,9 @@ func buildUserActivityImageFile(entry userActivityEntry) *discordgo.File {
 			return file
 		}
 	}
-	seed := entry.DiscordID
+	seed := entry.ID
 	if seed == "" {
-		seed = entry.ID
-	}
-	if seed == "" {
-		seed = entry.Discord
+		seed = entry.DiscordID
 	}
 	if seed == "" {
 		return nil
