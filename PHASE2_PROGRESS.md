@@ -174,14 +174,14 @@ func CombineImages(liveImageData, diffImageData []byte) (io.Reader, error) {
 - **`internal/notifications/notifier.go`** - 通知ロジック実装
   - サーバーごとの通知状態管理
   - 段階的な通知（Tier制）
-  - 遅延通知のスケジューリング
+  - 即時通知（Tier制）
   - メンション機能
 
 #### 通知の種類
 1. **荒らし検知通知**
    - 差分率が設定された閾値を超えた時
    - Tier制で段階的に通知（10%, 20%, 30%, 40%, 50%）
-   - 遅延通知で連続通知を防止
+   - 即時通知
 
 2. **省電力モード解除通知**
    - 完全な0%から変動した時
@@ -197,7 +197,6 @@ type GuildSettings struct {
     AutoNotifyEnabled     bool    // 自動通知の有効/無効
     NotificationChannel   *string // 通知先チャンネルID
     NotificationThreshold float64 // 通知閾値（デフォルト10%）
-    NotificationDelay     float64 // 通知遅延（デフォルト3秒）
     NotificationMetric    string  // "diff" or "weighted"
     MentionRole           *string // メンション対象ロール
     MentionThreshold      float64 // メンション閾値（デフォルト50%）
@@ -260,7 +259,7 @@ URL: wss://gold3112.online/ws
   - 省電力モード解除通知（画像付き ✅）
   - 修復完了通知（画像付き ✅）
 設定管理: サーバーごとに独立
-遅延機能: 連続通知防止あり
+即時通知
 ```
 
 ---
@@ -350,7 +349,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
     
     // Tierが上昇した場合のみ通知
     if currentTier > state.LastTier {
-        n.scheduleDelayedNotification(...)
+        n.sendNotification(...)
     }
     
     state.LastTier = currentTier
@@ -408,7 +407,7 @@ Phase 2: リアルタイム監視と通知  ████████████
   ✅ 通知システム（3種類）
   ✅ 設定管理（/settings）
   ✅ サーバーごとの独立設定
-  ✅ 遅延通知・Tier制
+  ✅ 即時通知・Tier制
 
 Phase 3準備中:
   📋 統計グラフ
@@ -509,7 +508,7 @@ WebSocket更新: リアルタイム（約1秒間隔）
 - ✅ Discord Botとの統合
 - ✅ 3種類の通知（すべて画像付き）
 - ✅ サーバーごとの設定管理
-- ✅ 遅延通知・Tier制
+- ✅ 即時通知・Tier制
 
 ### コード品質
 - ✅ エラーハンドリング完備

@@ -14,7 +14,6 @@ type GuildSettings struct {
 	NotificationVandalChannel *string `json:"notification_vandal_channel,omitempty"` // 荒らしユーザー通知チャンネル
 	NotificationFixChannel    *string `json:"notification_fix_channel,omitempty"`    // 修復ユーザー通知チャンネル
 	AutoNotifyEnabled         bool    `json:"auto_notify_enabled"`                   // 自動通知ON/OFF
-	NotificationDelay         float64 `json:"notification_delay"`                    // 通知遅延（秒）
 	NotificationThreshold     float64 `json:"notification_threshold"`                // 通知閾値（%）
 	MentionRole               *string `json:"mention_role,omitempty"`                // メンションロールID
 	MentionThreshold          float64 `json:"mention_threshold"`                     // メンション閾値（%）
@@ -24,7 +23,6 @@ type GuildSettings struct {
 // DefaultGuildSettings デフォルト設定
 var DefaultGuildSettings = GuildSettings{
 	AutoNotifyEnabled:     true,
-	NotificationDelay:     0.5,
 	NotificationThreshold: 10.0,
 	MentionThreshold:      50.0,
 	NotificationMetric:    "overall",

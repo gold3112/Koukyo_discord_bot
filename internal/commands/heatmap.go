@@ -53,7 +53,7 @@ func (c *HeatmapCommand) respondHeatmap(s *discordgo.Session, channelID string) 
 		_, err := s.ChannelMessageSend(channelID, "ヒートマップの集計がまだありません。")
 		return err
 	}
-	pngBuf, err := embeds.BuildHeatmapPNG(counts, gw, gh, 800, 800)
+	pngBuf, err := embeds.BuildHeatmapPNG(counts, gw, gh, gw, gh)
 	if err != nil {
 		_, e := s.ChannelMessageSend(channelID, fmt.Sprintf("ヒートマップ生成に失敗しました: %v", err))
 		return e
@@ -96,7 +96,7 @@ func (c *HeatmapCommand) respondHeatmapFollowup(s *discordgo.Session, i *discord
 		})
 		return err
 	}
-	pngBuf, err := embeds.BuildHeatmapPNG(counts, gw, gh, 800, 800)
+	pngBuf, err := embeds.BuildHeatmapPNG(counts, gw, gh, gw, gh)
 	if err != nil {
 		_, e := s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 			Content: fmt.Sprintf("ヒートマップ生成に失敗しました: %v", err),
@@ -119,3 +119,4 @@ func (c *HeatmapCommand) respondHeatmapFollowup(s *discordgo.Session, i *discord
 	})
 	return err
 }
+

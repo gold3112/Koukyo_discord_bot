@@ -473,11 +473,6 @@ func BuildSettingsEmbed(settings *config.SettingsManager, guildID string) *disco
 				Inline: true,
 			},
 			{
-				Name:   "通知遅延",
-				Value:  fmt.Sprintf("**%.1f秒**", guildSettings.NotificationDelay),
-				Inline: true,
-			},
-			{
 				Name:   "通知閾値",
 				Value:  fmt.Sprintf("**%.0f%%**", guildSettings.NotificationThreshold),
 				Inline: true,

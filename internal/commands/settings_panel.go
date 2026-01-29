@@ -65,11 +65,6 @@ func (v *SettingsView) Components() []discordgo.MessageComponent {
 		discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
 				discordgo.Button{
-					Label:    "通知遅延を設定",
-					Style:    discordgo.SecondaryButton,
-					CustomID: "settings_set_delay",
-				},
-				discordgo.Button{
 					Label:    "通知閾値を設定",
 					Style:    discordgo.SecondaryButton,
 					CustomID: "settings_set_threshold",
@@ -128,8 +123,6 @@ func HandleSettingsButtonInteraction(
 		handleToggleNotify(s, i, settings, notifier)
 	case "settings_toggle_metric":
 		handleToggleMetric(s, i, settings, notifier)
-	case "settings_set_delay":
-		handleSetDelay(s, i, settings)
 	case "settings_set_threshold":
 		handleSetThreshold(s, i, settings)
 	case "settings_set_mention_threshold":
@@ -185,35 +178,6 @@ func handleToggleMetric(s *discordgo.Session, i *discordgo.InteractionCreate, se
 		Data: &discordgo.InteractionResponseData{
 			Embeds:     []*discordgo.MessageEmbed{embed},
 			Components: view.Components(),
-		},
-	})
-}
-
-// handleSetDelay 通知遅延設定モーダル
-func handleSetDelay(s *discordgo.Session, i *discordgo.InteractionCreate, settings *config.SettingsManager) {
-	currentSettings := settings.GetGuildSettings(i.GuildID)
-
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseModal,
-		Data: &discordgo.InteractionResponseData{
-			CustomID: "modal_set_delay",
-			Title:    "通知遅延を設定",
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.TextInput{
-							CustomID:    "delay_input",
-							Label:       "遅延時間（秒）",
-							Style:       discordgo.TextInputShort,
-							Placeholder: "0.5",
-							Value:       fmt.Sprintf("%.1f", currentSettings.NotificationDelay),
-							Required:    true,
-							MinLength:   1,
-							MaxLength:   10,
-						},
-					},
-				},
-			},
 		},
 	})
 }
@@ -344,40 +308,11 @@ func HandleSettingsModalSubmit(s *discordgo.Session, i *discordgo.InteractionCre
 	data := i.ModalSubmitData()
 
 	switch data.CustomID {
-	case "modal_set_delay":
-		handleModalSetDelay(s, i, settings, notifier, data)
 	case "modal_set_threshold":
 		handleModalSetThreshold(s, i, settings, notifier, data)
 	case "modal_set_mention_threshold":
 		handleModalSetMentionThreshold(s, i, settings, data)
 	}
-}
-
-func handleModalSetDelay(s *discordgo.Session, i *discordgo.InteractionCreate, settings *config.SettingsManager, notifier *notifications.Notifier, data discordgo.ModalSubmitInteractionData) {
-	input := data.Components[0].(*discordgo.ActionsRow).Components[0].(*discordgo.TextInput).Value
-	value, err := strconv.ParseFloat(input, 64)
-	if err != nil || value < 0 || value > 60 {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "❌ 0〜60の数値を入力してください。",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
-
-	settings.UpdateGuildSetting(i.GuildID, func(gs *config.GuildSettings) {
-		gs.NotificationDelay = value
-	})
-
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("✅ 通知遅延を %.1f秒 に設定しました。", value),
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
-	})
 }
 
 func handleModalSetThreshold(s *discordgo.Session, i *discordgo.InteractionCreate, settings *config.SettingsManager, notifier *notifications.Notifier, data discordgo.ModalSubmitInteractionData) {

@@ -17,7 +17,6 @@ import (
 type NotificationState struct {
 	LastTier          Tier
 	MentionTriggered  bool
-	PendingNotifyTask chan struct{} // 遅延通知のキャンセル用
 	WasZeroDiff       bool          // 前回が0%だったか
 }
 
@@ -61,7 +60,6 @@ func (n *Notifier) getState(guildID string) *NotificationState {
 	state := &NotificationState{
 		LastTier:          TierNone,
 		MentionTriggered:  false,
-		PendingNotifyTask: make(chan struct{}),
 		WasZeroDiff:       true, // 初回は0%とみなす
 	}
 	n.states[guildID] = state
@@ -112,11 +110,10 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 
 	// Tierが変化した場合のみ通知
 	if currentTier != state.LastTier {
-		// 遅延通知を送信
 		if currentTier > state.LastTier {
-			n.scheduleDelayedNotification(guildID, settings, data, currentTier, diffValue, notificationIncrease)
+			n.sendNotification(guildID, settings, data, currentTier, diffValue)
 		} else {
-			n.scheduleDelayedNotification(guildID, settings, data, currentTier, diffValue, notificationDecrease)
+			n.sendDecreaseNotification(guildID, settings, data, currentTier, diffValue)
 		}
 	}
 
@@ -127,47 +124,6 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 }
 
 // scheduleDelayedNotification 遅延通知をスケジュール
-func (n *Notifier) scheduleDelayedNotification(
-	guildID string,
-	settings config.GuildSettings,
-	data *monitor.MonitorData,
-	tier Tier,
-	diffValue float64,
-	kind notificationKind,
-) {
-	state := n.getState(guildID)
-
-	// 既存の遅延通知をキャンセル
-	select {
-	case state.PendingNotifyTask <- struct{}{}:
-	default:
-	}
-
-	// 新しい遅延通知をスケジュール
-	go func() {
-		delay := time.Duration(settings.NotificationDelay * float64(time.Second))
-		select {
-		case <-time.After(delay):
-			// 遅延後に通知を送信
-			if kind == notificationDecrease {
-				n.sendDecreaseNotification(guildID, settings, data, tier, diffValue)
-				return
-			}
-			n.sendNotification(guildID, settings, data, tier, diffValue)
-		case <-state.PendingNotifyTask:
-			// キャンセルされた
-			log.Printf("Notification cancelled for guild %s", guildID)
-		}
-	}()
-}
-
-type notificationKind int
-
-const (
-	notificationIncrease notificationKind = iota
-	notificationDecrease
-)
-
 // sendNotification 通知を送信
 func (n *Notifier) sendNotification(
 	guildID string,

@@ -52,7 +52,6 @@ type MonitorState struct {
 	WeightedHistoryCount int
 	ReferencePixels     ReferencePixels
 	PowerSaveMode       bool
-	PowerSaveRestart    bool
 	ZeroDiffStartTime   *time.Time
 	// Timelapse recording
 	TimelapseActive      bool
@@ -127,14 +126,12 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 			elapsed := time.Since(*ms.ZeroDiffStartTime)
 			if elapsed >= 10*time.Minute {
 				ms.PowerSaveMode = true
-				ms.PowerSaveRestart = true
 				ms.resetDiffHistoryLocked()
 			}
 		}
 	} else {
 		if ms.PowerSaveMode {
 			ms.PowerSaveMode = false
-			ms.PowerSaveRestart = false
 		}
 		ms.ZeroDiffStartTime = nil
 	}
@@ -247,27 +244,29 @@ func (ms *MonitorState) updateHeatmap(diffImage []byte) error {
 	defer ms.mu.Unlock()
 
 	if ms.HeatmapGridW == 0 || ms.HeatmapGridW*ms.HeatmapGridH == 0 || w != ms.HeatmapSourceW || h != ms.HeatmapSourceH {
-		ms.HeatmapGridW = w
-		ms.HeatmapGridH = h
-		ms.HeatmapCounts = make([]uint32, w*h)
+		gridW := w
+		gridH := h
+		if gridW < 1 {
+			gridW = 1
+		}
+		if gridH < 1 {
+			gridH = 1
+		}
+		ms.HeatmapGridW = gridW
+		ms.HeatmapGridH = gridH
+		ms.HeatmapCounts = make([]uint32, gridW*gridH)
 		ms.HeatmapSourceW = w
 		ms.HeatmapSourceH = h
 	}
 
-	stepX := int(float64(w) / 1000.0)
-	if stepX < 1 {
-		stepX = 1
-	}
-	stepY := int(float64(h) / 1000.0)
-	if stepY < 1 {
-		stepY = 1
-	}
+	stepX := 1
+	stepY := 1
 	for y := b.Min.Y; y < b.Max.Y; y += stepY {
 		for x := b.Min.X; x < b.Max.X; x += stepX {
 			_, _, _, a := img.At(x, y).RGBA()
 			if a > 0 {
-				gx := int(float64(x) * float64(ms.HeatmapGridW) / float64(w))
-				gy := int(float64(y) * float64(ms.HeatmapGridH) / float64(h))
+				gx := int(float64(x-b.Min.X) * float64(ms.HeatmapGridW) / float64(w))
+				gy := int(float64(y-b.Min.Y) * float64(ms.HeatmapGridH) / float64(h))
 				if gx >= 0 && gx < ms.HeatmapGridW && gy >= 0 && gy < ms.HeatmapGridH {
 					ms.HeatmapCounts[gy*ms.HeatmapGridW+gx]++
 				}
