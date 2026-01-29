@@ -44,15 +44,15 @@ type ImageData struct {
 
 // MonitorState 現在の監視状態
 type MonitorState struct {
-	LatestData          *MonitorData
-	LatestImages        *ImageData
-	DiffHistory         *ring.Ring
-	WeightedDiffHistory *ring.Ring
-	DiffHistoryCount    int
+	LatestData           *MonitorData
+	LatestImages         *ImageData
+	DiffHistory          *ring.Ring
+	WeightedDiffHistory  *ring.Ring
+	DiffHistoryCount     int
 	WeightedHistoryCount int
-	ReferencePixels     ReferencePixels
-	PowerSaveMode       bool
-	ZeroDiffStartTime   *time.Time
+	ReferencePixels      ReferencePixels
+	PowerSaveMode        bool
+	ZeroDiffStartTime    *time.Time
 	// Timelapse recording
 	TimelapseActive      bool
 	TimelapseFrames      *ring.Ring
@@ -71,7 +71,7 @@ type MonitorState struct {
 	DailyPeakDiff      float64
 	DailyPeakAt        time.Time
 	DailyPeakDiffImage []byte
-	mu             sync.RWMutex
+	mu                 sync.RWMutex
 }
 
 // DiffRecord 差分履歴のレコード

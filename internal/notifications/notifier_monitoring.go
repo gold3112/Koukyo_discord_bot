@@ -1,9 +1,9 @@
 package notifications
 
 import (
-	"bytes"
 	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/monitor"
+	"bytes"
 	"fmt"
 	"log"
 	"time"
@@ -117,7 +117,7 @@ func (n *Notifier) postTimelapseToGuilds(frames []monitor.TimelapseFrame) {
 					Inline: true,
 				},
 			},
-			Timestamp:   time.Now().Format(time.RFC3339),
+			Timestamp: time.Now().Format(time.RFC3339),
 		}
 		_, err := n.session.ChannelMessageSendComplex(*gs.NotificationChannel, &discordgo.MessageSend{
 			Embeds: []*discordgo.MessageEmbed{embed},

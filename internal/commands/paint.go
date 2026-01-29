@@ -72,7 +72,7 @@ func (c *PaintCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interacti
 		recoverSec/60,
 		recoverSec%60,
 		finish.Format("15:04:05"), // フォーマットはそのまま、時刻自体が指定TZになる
-		finish.Format("MST"),     // タイムゾーン略称を追加
+		finish.Format("MST"),      // タイムゾーン略称を追加
 	)
 	if notify {
 		msg += "\n\n🔔 全回復時に通知します！"

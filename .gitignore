@@ -31,3 +31,7 @@ data/region_database.json
 data/settings.json
 data/user_activity.json
 data/vandalized_pixels.json
+# data files (runtime)
+data/
+!data/easter_eggs.json
+!data/.gitkeep

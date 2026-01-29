@@ -21,15 +21,15 @@ import (
 )
 
 const (
-	userActivityPrefix        = "useractivity:"
-	userActivitySelectPrefix  = "useractivity_select"
-	userActivityModeDetail    = "detail"
+	userActivityPrefix         = "useractivity:"
+	userActivitySelectPrefix   = "useractivity_select"
+	userActivityModeDetail     = "detail"
 	userActivityMaxSelectItems = 25
-	userActivityIconSize      = 160
-	userActivityColorsNb      = 9
-	userActivitySaturation    = 95
-	userActivityLightness     = 45
-	userActivityMagicNumber   = 5
+	userActivityIconSize       = 160
+	userActivityColorsNb       = 9
+	userActivitySaturation     = 95
+	userActivityLightness      = 45
+	userActivityMagicNumber    = 5
 )
 
 type UserActivityCommand struct {

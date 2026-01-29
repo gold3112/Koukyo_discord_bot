@@ -119,4 +119,3 @@ func (c *HeatmapCommand) respondHeatmapFollowup(s *discordgo.Session, i *discord
 	})
 	return err
 }
-

@@ -15,9 +15,9 @@ import (
 
 // NotificationState サーバーごとの通知状態
 type NotificationState struct {
-	LastTier          Tier
-	MentionTriggered  bool
-	WasZeroDiff       bool          // 前回が0%だったか
+	LastTier         Tier
+	MentionTriggered bool
+	WasZeroDiff      bool // 前回が0%だったか
 }
 
 // Notifier 通知システム
@@ -58,9 +58,9 @@ func (n *Notifier) getState(guildID string) *NotificationState {
 	}
 
 	state := &NotificationState{
-		LastTier:          TierNone,
-		MentionTriggered:  false,
-		WasZeroDiff:       true, // 初回は0%とみなす
+		LastTier:         TierNone,
+		MentionTriggered: false,
+		WasZeroDiff:      true, // 初回は0%とみなす
 	}
 	n.states[guildID] = state
 	return state
@@ -564,4 +564,3 @@ func (n *Notifier) NotifyNewUser(kind string, user activity.UserActivity) {
 		}
 	}
 }
-

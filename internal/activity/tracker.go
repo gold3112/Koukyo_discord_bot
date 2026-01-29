@@ -2,16 +2,11 @@ package activity
 
 import (
 	"bytes"
-	"compress/gzip"
-	"compress/zlib"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"image/png"
-	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,10 +41,6 @@ type PaintedBy struct {
 	Picture      string `json:"picture"`
 	Discord      string `json:"discord"`
 	DiscordID    string `json:"discordId"`
-}
-
-type PixelAPIResponse struct {
-	PaintedBy *PaintedBy `json:"paintedBy"`
 }
 
 type PixelRef struct {
@@ -113,24 +104,11 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 		queueSize = 4096
 	}
 	diffQueueSize := 1
-	dialer := &net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 5 * time.Second,
-	}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "tcp4", addr)
-		},
-		ForceAttemptHTTP2:  false,
-		DisableKeepAlives:  true,
-		DisableCompression: true,
-		TLSNextProto:       make(map[string]func(string, *tls.Conn) http.RoundTripper),
-	}
 	t := &Tracker{
 		cfg:          cfg,
 		limiter:      limiter,
 		dataDir:      dataDir,
-		httpClient:   &http.Client{Transport: transport, Timeout: 8 * time.Second},
+		httpClient:   NewPixelHTTPClient(),
 		queue:        make(chan Pixel, queueSize),
 		pending:      make(map[string]Pixel),
 		diffQueue:    make(chan []byte, diffQueueSize),
@@ -306,9 +284,9 @@ func (t *Tracker) processPixel(px Pixel) {
 	entry := t.activity[painterID]
 	if entry == nil {
 		entry = &UserActivity{
-			ID:            painterID,
-			Name:          painter.Name,
-			AllianceName:  painter.AllianceName,
+			ID:           painterID,
+			Name:         painter.Name,
+			AllianceName: painter.AllianceName,
 		}
 		ensureActivityMaps(entry)
 		t.activity[painterID] = entry
@@ -388,49 +366,15 @@ func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {
 	tileY := px.AbsY / utils.WplaceTileSize
 	pixelX := px.AbsX % utils.WplaceTileSize
 	pixelY := px.AbsY % utils.WplaceTileSize
-	url := fmt.Sprintf("https://backend.wplace.live/s0/pixel/%d/%d?x=%d&y=%d", tileX, tileY, pixelX, pixelY)
-
-	val, err := t.limiter.Do(t.ctx, "backend.wplace.live", func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(t.ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Close = true
-		req.Header.Set("Connection", "close")
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-		req.Header.Set("Accept", "application/json, text/plain, */*")
-		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-		req.Header.Set("Accept-Encoding", "identity")
-		req.Header.Set("Sec-Fetch-Dest", "empty")
-		req.Header.Set("Sec-Fetch-Mode", "cors")
-		req.Header.Set("Sec-Fetch-Site", "same-site")
-		req.Header.Set("Sec-CH-UA", "\"Chromium\";v=\"120\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"120\"")
-		req.Header.Set("Sec-CH-UA-Mobile", "?0")
-		req.Header.Set("Sec-CH-UA-Platform", "\"Windows\"")
-		resp, err := t.httpClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			body, _ := readResponseBody(resp)
-			if resp.StatusCode == http.StatusTooManyRequests {
-				t.markBackoff()
-			}
-			return nil, fmt.Errorf("pixel api status: %s body=%s", resp.Status, string(body))
-		}
-		t.resetBackoff()
-		return readResponseBody(resp)
-	})
+	parsed, status, err := FetchPixelInfo(t.ctx, t.httpClient, t.limiter, tileX, tileY, pixelX, pixelY)
 	if err != nil {
+		if status == http.StatusTooManyRequests {
+			t.markBackoff()
+		}
 		return nil, err
 	}
-
-	var parsed PixelAPIResponse
-	if err := json.Unmarshal(val.([]byte), &parsed); err != nil {
-		return nil, err
-	}
-	if parsed.PaintedBy == nil || parsed.PaintedBy.ID == 0 {
+	t.resetBackoff()
+	if parsed == nil || parsed.PaintedBy == nil || parsed.PaintedBy.ID == 0 {
 		return nil, nil
 	}
 	return parsed.PaintedBy, nil
@@ -473,27 +417,6 @@ func (t *Tracker) resetBackoff() {
 	t.backoffDelay = 2 * time.Second
 	t.backoffUntil = time.Time{}
 	t.mu.Unlock()
-}
-
-func readResponseBody(resp *http.Response) ([]byte, error) {
-	switch resp.Header.Get("Content-Encoding") {
-	case "gzip":
-		reader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		defer reader.Close()
-		return io.ReadAll(reader)
-	case "deflate":
-		reader, err := zlib.NewReader(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		defer reader.Close()
-		return io.ReadAll(reader)
-	default:
-		return io.ReadAll(resp.Body)
-	}
 }
 
 func (t *Tracker) loadState() {

@@ -12,7 +12,7 @@ import (
 // CombineImages 2つの画像を横に並べて結合する
 func CombineImages(liveImageData, diffImageData []byte) (io.Reader, error) {
 	log.Printf("CombineImages called: live=%d bytes, diff=%d bytes", len(liveImageData), len(diffImageData))
-	
+
 	// PNG画像をデコード
 	liveImg, err := png.Decode(bytes.NewReader(liveImageData))
 	if err != nil {

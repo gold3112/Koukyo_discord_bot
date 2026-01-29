@@ -1,9 +1,9 @@
 package notifications
 
 import (
-	"bytes"
 	"Koukyo_discord_bot/internal/activity"
 	"Koukyo_discord_bot/internal/monitor"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"

@@ -20,7 +20,7 @@ type Handler struct {
 	dataDir  string
 }
 
-func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier, limiter *utils.RateLimiter, dataDir string) *Handler { // limiter 引数を追加
+func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier, limiter *utils.RateLimiter, activityLimiter *utils.RateLimiter, dataDir string) *Handler { // limiter 引数を追加
 	registry := commands.NewRegistry()
 
 	// すべてのコマンドを配列で一元管理
@@ -32,6 +32,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		commands.NewNowCommand(mon),
 		commands.NewTimeCommand(),
 		commands.NewConvertCommand(),
+		commands.NewMeCommand(dataDir, activityLimiter),
 		commands.NewSettingsCommand(settingsManager, notifier), // settingsManager を渡す
 		commands.NewNotificationCommand(settingsManager),
 		commands.NewGetCommand(limiter), // limiter を渡すように変更

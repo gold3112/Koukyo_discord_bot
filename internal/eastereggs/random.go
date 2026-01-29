@@ -63,8 +63,8 @@ func RegisterWeightedCommandWithChance(name string, chancePercent float64, choic
 	}
 	registry.mu.Lock()
 	registry.commands[name] = randomCommand{
-		weighted:       copied,
-		chancePercent:  chancePercent,
+		weighted:      copied,
+		chancePercent: chancePercent,
 	}
 	registry.mu.Unlock()
 }
