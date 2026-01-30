@@ -381,6 +381,7 @@ func buildUserActivityDetailEmbedFromEntry(kind string, entry userActivityEntry)
 			{Name: "同盟", Value: alliance, Inline: true},
 			{Name: "Discord", Value: discordName, Inline: true},
 			{Name: "Discord ID", Value: discordID, Inline: true},
+			{Name: "アイコンseed", Value: entry.ID, Inline: true},
 			{Name: "荒らし数", Value: fmt.Sprintf("%d", entry.VandalCount), Inline: true},
 			{Name: "修復数", Value: fmt.Sprintf("%d", entry.RestoredCount), Inline: true},
 			{Name: "スコア", Value: fmt.Sprintf("%d", entry.Score), Inline: true},
@@ -588,14 +589,10 @@ func buildUserActivityImageFile(entry userActivityEntry) *discordgo.File {
 			return file
 		}
 	}
-	seed := entry.ID
-	if seed == "" {
-		seed = entry.DiscordID
-	}
-	if seed == "" {
+	if entry.ID == "" {
 		return nil
 	}
-	data, err := buildIdenticonPNG(seed, userActivityIconSize)
+	data, err := buildIdenticonPNG(entry.ID, userActivityIconSize)
 	if err != nil {
 		return nil
 	}
