@@ -2,14 +2,10 @@ package commands
 
 import (
 	"Koukyo_discord_bot/internal/activity"
+	"Koukyo_discord_bot/internal/utils"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,10 +22,6 @@ const (
 	userActivityModeDetail     = "detail"
 	userActivityMaxSelectItems = 25
 	userActivityIconSize       = 160
-	userActivityColorsNb       = 9
-	userActivitySaturation     = 95
-	userActivityLightness      = 45
-	userActivityMagicNumber    = 5
 )
 
 type UserActivityCommand struct {
@@ -88,7 +80,7 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 		if err != nil {
 			return respondUserListError(s, i, err)
 		}
-		embed, file := buildUserActivityDetailEmbedFromEntry(kind, entry)
+		embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(entry, kind), listType, entry)
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -107,7 +99,7 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 			return respondUserListError(s, i, fmt.Errorf("該当ユーザーが見つかりません"))
 		}
 		if len(matches) == 1 {
-			embed, file := buildUserActivityDetailEmbedFromEntry(kind, matches[0])
+			embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(matches[0], kind), listType, matches[0])
 			return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -280,7 +272,7 @@ func HandleUserActivitySelect(s *discordgo.Session, i *discordgo.InteractionCrea
 		})
 		return
 	}
-	embed, file := buildUserActivityDetailEmbedFromEntry(userListKindGrf, entry)
+	embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(entry, userListKindGrf), userListTypeScore, entry)
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
@@ -324,7 +316,7 @@ func buildUserActivityDetailEmbed(dataDir, kind, listType string, page int) (*di
 		page = len(entries) - 1
 	}
 	entry := entries[page]
-	embed, file := buildUserActivityDetailEmbedFromEntry(kind, entry)
+	embed, file := buildUserActivityDetailEmbedFromEntry(kind, listType, entry)
 	embed.Footer = &discordgo.MessageEmbedFooter{
 		Text: fmt.Sprintf("ページ %d / %d", page+1, len(entries)),
 	}
@@ -350,8 +342,8 @@ func buildUserActivityDetailEmbed(dataDir, kind, listType string, page int) (*di
 	return embed, components, file, nil
 }
 
-func buildUserActivityDetailEmbedFromEntry(kind string, entry userActivityEntry) (*discordgo.MessageEmbed, *discordgo.File) {
-	name := formatUserDisplayName(entry.Name, entry.ID)
+func buildUserActivityDetailEmbedFromEntry(kind, listType string, entry userActivityEntry) (*discordgo.MessageEmbed, *discordgo.File) {
+	name := utils.FormatUserDisplayName(entry.Name, entry.ID)
 	alliance := entry.Alliance
 	if alliance == "" {
 		alliance = "-"
@@ -373,6 +365,21 @@ func buildUserActivityDetailEmbedFromEntry(kind string, entry userActivityEntry)
 	if kind == userListKindFix {
 		title = "🛠️ 修復ユーザー詳細"
 	}
+	score := entry.Score
+	if listType == "" {
+		listType = userListTypeScore
+	}
+	if listType == userListTypeAbsolute {
+		if kind == userListKindFix {
+			score = entry.RestoredCount
+		} else {
+			score = entry.VandalCount
+		}
+	} else if kind == userListKindFix {
+		score = entry.RestoredCount - entry.VandalCount
+	} else {
+		score = entry.VandalCount - entry.RestoredCount
+	}
 	embed := &discordgo.MessageEmbed{
 		Title: title,
 		Color: 0x3498DB,
@@ -384,7 +391,7 @@ func buildUserActivityDetailEmbedFromEntry(kind string, entry userActivityEntry)
 			{Name: "アイコンseed", Value: entry.ID, Inline: true},
 			{Name: "荒らし数", Value: fmt.Sprintf("%d", entry.VandalCount), Inline: true},
 			{Name: "修復数", Value: fmt.Sprintf("%d", entry.RestoredCount), Inline: true},
-			{Name: "スコア", Value: fmt.Sprintf("%d", entry.Score), Inline: true},
+			{Name: "スコア", Value: fmt.Sprintf("%d", score), Inline: true},
 			{Name: "最終観測", Value: lastSeenText, Inline: false},
 		},
 		Timestamp: time.Now().Format(time.RFC3339),
@@ -535,38 +542,6 @@ func loadUserActivityByID(dataDir, userID, discordID string) (userActivityEntry,
 	return userActivityEntry{}, fmt.Errorf("該当ユーザーが見つかりません")
 }
 
-func decodePictureDataURL(value string) *discordgo.File {
-	if value == "" || !strings.HasPrefix(value, "data:image/") {
-		return nil
-	}
-	parts := strings.SplitN(value, ",", 2)
-	if len(parts) != 2 {
-		return nil
-	}
-	header := parts[0]
-	payload := parts[1]
-	if !strings.Contains(header, ";base64") {
-		return nil
-	}
-	data, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	ext := "png"
-	switch {
-	case strings.Contains(header, "image/jpeg"):
-		ext = "jpg"
-	case strings.Contains(header, "image/webp"):
-		ext = "webp"
-	}
-	filename := "user_picture." + ext
-	return &discordgo.File{
-		Name:        filename,
-		ContentType: strings.TrimPrefix(strings.SplitN(header, ";", 2)[0], "data:"),
-		Reader:      bytes.NewReader(data),
-	}
-}
-
 func normalizeUserListKind(kind string) string {
 	switch strings.ToLower(kind) {
 	case userListKindFix:
@@ -574,6 +549,16 @@ func normalizeUserListKind(kind string) string {
 	default:
 		return userListKindGrf
 	}
+}
+
+func inferUserKind(entry userActivityEntry, fallback string) string {
+	if entry.RestoredCount > entry.VandalCount {
+		return userListKindFix
+	}
+	if entry.VandalCount > entry.RestoredCount {
+		return userListKindGrf
+	}
+	return normalizeUserListKind(fallback)
 }
 
 func buildOptionalFiles(file *discordgo.File) []*discordgo.File {
@@ -585,14 +570,14 @@ func buildOptionalFiles(file *discordgo.File) []*discordgo.File {
 
 func buildUserActivityImageFile(entry userActivityEntry) *discordgo.File {
 	if entry.Picture != "" {
-		if file := decodePictureDataURL(entry.Picture); file != nil {
+		if file := utils.DecodePictureDataURL(entry.Picture); file != nil {
 			return file
 		}
 	}
 	if entry.ID == "" {
 		return nil
 	}
-	data, err := buildIdenticonPNG(entry.ID, userActivityIconSize)
+	data, err := utils.BuildIdenticonPNG(entry.ID, userActivityIconSize)
 	if err != nil {
 		return nil
 	}
@@ -612,7 +597,7 @@ func buildUserActivitySearchEmbed(query string, entries []userActivityEntry) (*d
 	lines := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
 		entry := entries[i]
-		name := formatUserDisplayName(entry.Name, entry.ID)
+		name := utils.FormatUserDisplayName(entry.Name, entry.ID)
 		discordName := entry.Discord
 		if discordName == "" {
 			discordName = "-"
@@ -657,100 +642,4 @@ func truncateLabel(value string, max int) string {
 		return value[:max]
 	}
 	return value[:max-3] + "..."
-}
-
-func buildIdenticonPNG(seed string, size int) ([]byte, error) {
-	if size <= 0 {
-		size = userActivityIconSize
-	}
-	hash := simpleHash(seed)
-	hue := float64(hash%userActivityColorsNb) * (360.0 / float64(userActivityColorsNb))
-	r, g, b := hslToRGB(hue, float64(userActivitySaturation), float64(userActivityLightness))
-	fill := color.RGBA{R: r, G: g, B: b, A: 0xFF}
-
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	cell := size / 5
-	if cell <= 0 {
-		cell = 1
-	}
-	for i := 0; i < 25; i++ {
-		if (hash & (1 << (i % 15))) == 0 {
-			continue
-		}
-		x := i / 5
-		if i > 14 {
-			x = 7 - x
-		}
-		y := i % 5
-		startX := x * cell
-		startY := y * cell
-		for py := startY; py < startY+cell && py < size; py++ {
-			for px := startX; px < startX+cell && px < size; px++ {
-				img.Set(px, py, fill)
-			}
-		}
-	}
-	buf := new(bytes.Buffer)
-	if err := png.Encode(buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func simpleHash(value string) uint32 {
-	hash := int32(userActivityMagicNumber)
-	for _, r := range value {
-		hash = (hash ^ int32(r)) * -userActivityMagicNumber
-	}
-	return uint32(hash) >> 2
-}
-
-func hslToRGB(h, s, l float64) (uint8, uint8, uint8) {
-	h = math.Mod(h, 360) / 360.0
-	s = clamp01(s / 100.0)
-	l = clamp01(l / 100.0)
-	if s == 0 {
-		v := uint8(math.Round(l * 255))
-		return v, v, v
-	}
-	var q float64
-	if l < 0.5 {
-		q = l * (1 + s)
-	} else {
-		q = l + s - l*s
-	}
-	p := 2*l - q
-	r := hueToRGB(p, q, h+1.0/3.0)
-	g := hueToRGB(p, q, h)
-	b := hueToRGB(p, q, h-1.0/3.0)
-	return uint8(math.Round(r * 255)), uint8(math.Round(g * 255)), uint8(math.Round(b * 255))
-}
-
-func hueToRGB(p, q, t float64) float64 {
-	if t < 0 {
-		t += 1
-	}
-	if t > 1 {
-		t -= 1
-	}
-	switch {
-	case t < 1.0/6.0:
-		return p + (q-p)*6*t
-	case t < 1.0/2.0:
-		return q
-	case t < 2.0/3.0:
-		return p + (q-p)*(2.0/3.0-t)*6
-	default:
-		return p
-	}
-}
-
-func clamp01(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
 }

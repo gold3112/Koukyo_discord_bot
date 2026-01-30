@@ -2,6 +2,7 @@ package commands
 
 import (
 	"Koukyo_discord_bot/internal/activity"
+	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -235,7 +236,7 @@ func buildUserListEmbed(dataDir, kind, mode, listType string, page int) (*discor
 	jst := time.FixedZone("JST", 9*3600)
 	for i := start; i < end; i++ {
 		entry := entries[i]
-		name := formatUserDisplayName(entry.Name, entry.ID)
+		name := utils.FormatUserDisplayName(entry.Name, entry.ID)
 		if entry.Alliance != "" {
 			name = fmt.Sprintf("%s (%s)", name, entry.Alliance)
 		}
@@ -387,21 +388,6 @@ func respondUserListError(s *discordgo.Session, i *discordgo.InteractionCreate, 
 			Flags:   discordgo.MessageFlagsEphemeral,
 		},
 	})
-}
-
-func formatUserDisplayName(name, id string) string {
-	name = strings.TrimSpace(name)
-	id = strings.TrimSpace(id)
-	switch {
-	case name != "" && id != "":
-		return fmt.Sprintf("%s#%s", name, id)
-	case name != "":
-		return name
-	case id != "":
-		return fmt.Sprintf("ID:%s", id)
-	default:
-		return "-"
-	}
 }
 
 func sendUserListMessage(s *discordgo.Session, channelID, dataDir, kind, mode, listType string, page int) error {

@@ -106,7 +106,7 @@ func (c *MeCommand) buildMeEmbedByDiscordID(discordID string, user *discordgo.Us
 }
 
 func buildMeCardEmbed(entry userActivityEntry, user *discordgo.User) (*discordgo.MessageEmbed, *discordgo.File) {
-	name := formatUserDisplayName(entry.Name, entry.ID)
+	name := utils.FormatUserDisplayName(entry.Name, entry.ID)
 	alliance := entry.Alliance
 	if alliance == "" {
 		alliance = "-"
@@ -159,14 +159,14 @@ func buildMeCardEmbed(entry userActivityEntry, user *discordgo.User) (*discordgo
 
 func buildMeCardImageFile(entry userActivityEntry) *discordgo.File {
 	if entry.Picture != "" {
-		if file := decodePictureDataURL(entry.Picture); file != nil {
+		if file := utils.DecodePictureDataURL(entry.Picture); file != nil {
 			return file
 		}
 	}
 	if entry.ID == "" {
 		return nil
 	}
-	data, err := buildIdenticonPNG(entry.ID, userActivityIconSize)
+	data, err := utils.BuildIdenticonPNG(entry.ID, userActivityIconSize)
 	if err != nil {
 		return nil
 	}

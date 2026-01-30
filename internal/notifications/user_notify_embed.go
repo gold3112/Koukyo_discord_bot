@@ -2,17 +2,16 @@ package notifications
 
 import (
 	"Koukyo_discord_bot/internal/activity"
+	"Koukyo_discord_bot/internal/utils"
 	"bytes"
-	"encoding/base64"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 func buildUserNotifyEmbed(title string, user activity.UserActivity, isVandal bool) (*discordgo.MessageEmbed, *discordgo.File) {
-	name := formatUserDisplayName(user.Name, user.ID)
+	name := utils.FormatUserDisplayName(user.Name, user.ID)
 	alliance := user.AllianceName
 	if alliance == "" {
 		alliance = "-"
@@ -47,58 +46,20 @@ func buildUserNotifyEmbed(title string, user activity.UserActivity, isVandal boo
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	file := decodePictureDataURL(user.Picture)
+	file := utils.DecodePictureDataURL(user.Picture)
+	if file == nil && user.ID != "" {
+		if data, err := utils.BuildIdenticonPNG(user.ID, utils.DefaultIdenticonSize); err == nil {
+			file = &discordgo.File{
+				Name:        "user_identicon.png",
+				ContentType: "image/png",
+				Reader:      bytes.NewReader(data),
+			}
+		}
+	}
 	if file != nil {
 		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{
 			URL: "attachment://" + file.Name,
 		}
 	}
 	return embed, file
-}
-
-func formatUserDisplayName(name, id string) string {
-	name = strings.TrimSpace(name)
-	id = strings.TrimSpace(id)
-	switch {
-	case name != "" && id != "":
-		return fmt.Sprintf("%s#%s", name, id)
-	case name != "":
-		return name
-	case id != "":
-		return fmt.Sprintf("ID:%s", id)
-	default:
-		return "-"
-	}
-}
-
-func decodePictureDataURL(value string) *discordgo.File {
-	if value == "" || !strings.HasPrefix(value, "data:image/") {
-		return nil
-	}
-	parts := strings.SplitN(value, ",", 2)
-	if len(parts) != 2 {
-		return nil
-	}
-	header := parts[0]
-	payload := parts[1]
-	if !strings.Contains(header, ";base64") {
-		return nil
-	}
-	data, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	ext := "png"
-	switch {
-	case strings.Contains(header, "image/jpeg"):
-		ext = "jpg"
-	case strings.Contains(header, "image/webp"):
-		ext = "webp"
-	}
-	filename := "user_picture." + ext
-	return &discordgo.File{
-		Name:        filename,
-		ContentType: strings.TrimPrefix(strings.SplitN(header, ";", 2)[0], "data:"),
-		Reader:      bytes.NewReader(data),
-	}
 }
