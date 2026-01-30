@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "1.8.1"
+	Version = "1.9.0-Alpha"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
@@ -10,6 +10,7 @@ const (
 
 // PatchNotes パッチノートの内容
 var PatchNotes = []string{
+	"regionmapコマンドの実装(試験段階)",
 	"修復・荒らしユーザー等の処理を堅牢に改善",
 	"開発機能：・/meコマンドで実績などを追加予定",
 	"2026/01/29更新",

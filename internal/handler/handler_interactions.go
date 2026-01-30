@@ -79,6 +79,14 @@ func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.Inte
 		commands.HandleUserActivitySelect(s, i, h.dataDir)
 		return
 	}
+	if strings.HasPrefix(customID, "regionmap_page:") {
+		commands.HandleRegionMapPagination(s, i)
+		return
+	}
+	if strings.HasPrefix(customID, "regionmap_select:") {
+		commands.HandleRegionMapSelect(s, i)
+		return
+	}
 
 	log.Printf("Unknown message component: %s", customID)
 }

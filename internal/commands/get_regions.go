@@ -2,9 +2,15 @@ package commands
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 )
+
+const regionDBURL = "https://gold3112.online/tools/region-viewer/region_database.json"
 
 type Region struct {
 	RegionID     int             `json:"region_id"`
@@ -25,7 +31,13 @@ type RegionTileRange struct {
 }
 
 func loadRegionDB(path string) (RegionDB, error) {
-	bytes, err := os.ReadFile(path)
+	var bytes []byte
+	var err error
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		bytes, err = fetchRegionDB(path)
+	} else {
+		bytes, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -34,6 +46,19 @@ func loadRegionDB(path string) (RegionDB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func fetchRegionDB(url string) ([]byte, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("region database fetch failed: %s", resp.Status)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 func findRegionByName(db RegionDB, name string) (Region, bool) {
