@@ -87,6 +87,10 @@ func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.Inte
 		commands.HandleRegionMapSelect(s, i)
 		return
 	}
+	if strings.HasPrefix(customID, "regionmap_confirm:") {
+		commands.HandleRegionMapConfirm(s, i, h.limiter)
+		return
+	}
 
 	log.Printf("Unknown message component: %s", customID)
 }

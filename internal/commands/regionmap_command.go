@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -25,6 +26,8 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"github.com/bwmarrin/discordgo"
+
+	"Koukyo_discord_bot/internal/utils"
 )
 
 const (
@@ -41,13 +44,14 @@ const (
 	regionMapFontSizeSM      = 18
 	regionMapTitleFontSize   = 20
 	regionMapTitleFontSizeSM = 16
-	regionMapMaxConcurrent   = 16
+	regionMapMaxConcurrent   = 32
 	regionMapDBCacheTTL      = 2 * time.Minute
 	regionMapBaseCacheMax    = 8
 	regionMapOverlayCacheMax = 8
 
-	regionMapSelectPrefix = "regionmap_select:"
-	regionMapPagePrefix   = "regionmap_page:"
+	regionMapSelectPrefix  = "regionmap_select:"
+	regionMapPagePrefix    = "regionmap_page:"
+	regionMapConfirmPrefix = "regionmap_confirm:"
 )
 
 type RegionMapCommand struct{}
@@ -183,6 +187,34 @@ func HandleRegionMapSelect(s *discordgo.Session, i *discordgo.InteractionCreate)
 	}()
 }
 
+func HandleRegionMapConfirm(s *discordgo.Session, i *discordgo.InteractionCreate, limiter *utils.RateLimiter) {
+	regionName, ok := parseRegionMapConfirmID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+	if err := respondDeferred(s, i); err != nil {
+		return
+	}
+	go func() {
+		db, err := getRegionDBCached()
+		if err != nil {
+			_ = followupMessage(s, i, "❌ Regionデータベースの読み込みに失敗しました")
+			return
+		}
+		reg, ok := findRegionByName(db, regionName)
+		if !ok {
+			_ = followupMessage(s, i, "❌ Regionが見つかりません。")
+			return
+		}
+		embed, buf, filename, err := buildRegionDetailImage(reg, limiter)
+		if err != nil {
+			_ = followupMessage(s, i, "❌ 画像生成に失敗しました: "+err.Error())
+			return
+		}
+		_ = sendImageFollowup(s, i, buf.Bytes(), filename, embed)
+	}()
+}
+
 func buildRegionMapMessage(query string, page int, highlight string) (*discordgo.MessageEmbed, *discordgo.File, []discordgo.MessageComponent, error) {
 	db, err := getRegionDBCached()
 	if err != nil {
@@ -223,7 +255,7 @@ func buildRegionMapMessage(query string, page int, highlight string) (*discordgo
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	components := buildRegionMapComponents(query, names, page)
+	components := buildRegionMapComponents(query, names, page, highlight)
 	return embed, file, components, nil
 }
 
@@ -242,7 +274,7 @@ func getRegionDBCached() (RegionDB, error) {
 	return db, nil
 }
 
-func buildRegionMapComponents(query string, names []string, page int) []discordgo.MessageComponent {
+func buildRegionMapComponents(query string, names []string, page int, highlight string) []discordgo.MessageComponent {
 	total := totalPages(len(names), regionMapPageSize)
 	start := page * regionMapPageSize
 	end := start + regionMapPageSize
@@ -283,6 +315,17 @@ func buildRegionMapComponents(query string, names []string, page int) []discordg
 					Style:    discordgo.PrimaryButton,
 					CustomID: fmt.Sprintf("%s%s:%d", regionMapPagePrefix, encoded, page+1),
 					Disabled: page >= total-1,
+				},
+			},
+		})
+	}
+	if highlight != "" {
+		components = append(components, discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					Label:    "OK（詳細取得）",
+					Style:    discordgo.SuccessButton,
+					CustomID: fmt.Sprintf("%s%s", regionMapConfirmPrefix, encodeRegionMapConfirm(highlight)),
 				},
 			},
 		})
@@ -360,6 +403,30 @@ func decodeRegionMapKey(value string) (string, error) {
 	return url.QueryUnescape(string(raw))
 }
 
+func encodeRegionMapConfirm(value string) string {
+	escaped := url.QueryEscape(strings.TrimSpace(value))
+	return base64.RawURLEncoding.EncodeToString([]byte(escaped))
+}
+
+func parseRegionMapConfirmID(customID string) (string, bool) {
+	if !strings.HasPrefix(customID, regionMapConfirmPrefix) {
+		return "", false
+	}
+	payload := strings.TrimPrefix(customID, regionMapConfirmPrefix)
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", false
+	}
+	name, err := url.QueryUnescape(string(raw))
+	if err != nil {
+		return "", false
+	}
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
 func truncateRegionLabel(value string, max int) string {
 	if len(value) <= max {
 		return value
@@ -389,6 +456,147 @@ func clampPage(page, total, pageSize int) int {
 		return maxPage
 	}
 	return page
+}
+
+func buildRegionDetailImage(reg Region, limiter *utils.RateLimiter) (*discordgo.MessageEmbed, *bytes.Buffer, string, error) {
+	minTileX, minTileY := reg.TileRange.Min[0], reg.TileRange.Min[1]
+	maxTileX, maxTileY := reg.TileRange.Max[0], reg.TileRange.Max[1]
+	if minTileX < 0 || minTileY < 0 || maxTileX >= utils.WplaceTilesPerEdge || maxTileY >= utils.WplaceTilesPerEdge {
+		return nil, nil, "", fmt.Errorf("Regionタイル範囲が無効です: X[%d-%d] Y[%d-%d]", minTileX, maxTileX, minTileY, maxTileY)
+	}
+	gridCols := maxTileX - minTileX + 1
+	gridRows := maxTileY - minTileY + 1
+	if gridCols <= 0 || gridRows <= 0 {
+		return nil, nil, "", fmt.Errorf("Regionタイル範囲が無効です。")
+	}
+	totalTiles := gridCols * gridRows
+
+	tilesData := make([][]byte, totalTiles)
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	var firstErr error
+	var mu sync.Mutex
+	for ty := minTileY; ty <= maxTileY; ty++ {
+		for tx := minTileX; tx <= maxTileX; tx++ {
+			idx := (ty-minTileY)*gridCols + (tx - minTileX)
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(tileX, tileY, index int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				data, err := downloadRegionTile(ctx, limiter, tileX, tileY)
+				cancel()
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					return
+				}
+				tilesData[index] = data
+			}(tx, ty, idx)
+		}
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, nil, "", firstErr
+	}
+	for i, data := range tilesData {
+		if len(data) == 0 {
+			return nil, nil, "", fmt.Errorf("タイル画像のダウンロードに失敗しました (index=%d)", i)
+		}
+	}
+
+	buf, err := combineTiles(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, gridCols, gridRows)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	displayName := fmt.Sprintf("%s_%d", reg.Name, reg.CountryID)
+	filename := fmt.Sprintf("%s_full.png", strings.ReplaceAll(displayName, "#", "_"))
+	centerLat := reg.CenterLatLng[0]
+	centerLng := reg.CenterLatLng[1]
+	imageWidth := gridCols * utils.WplaceTileSize
+	imageHeight := gridRows * utils.WplaceTileSize
+	wplaceURL := utils.BuildWplaceURL(centerLng, centerLat, calculateZoomFromWH(imageWidth, imageHeight))
+
+	embed := &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("🗺️ %s 全域画像", displayName),
+		Color: 0x5865F2,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "Region ID",
+				Value:  fmt.Sprintf("`%d`", reg.RegionID),
+				Inline: true,
+			},
+			{
+				Name:   "City ID",
+				Value:  fmt.Sprintf("`%d`", reg.CityID),
+				Inline: true,
+			},
+			{
+				Name:   "タイル範囲",
+				Value:  fmt.Sprintf("X[%d-%d] Y[%d-%d]", minTileX, maxTileX, minTileY, maxTileY),
+				Inline: false,
+			},
+			{
+				Name:   "画像サイズ",
+				Value:  fmt.Sprintf("%dx%dpx", imageWidth, imageHeight),
+				Inline: true,
+			},
+			{
+				Name:   "タイル数",
+				Value:  fmt.Sprintf("%dタイル (%d×%d)", totalTiles, gridCols, gridRows),
+				Inline: true,
+			},
+			{
+				Name:   "中心座標",
+				Value:  fmt.Sprintf("緯度: %.4f, 経度: %.4f", centerLat, centerLng),
+				Inline: false,
+			},
+			{
+				Name:   "Wplace.live",
+				Value:  fmt.Sprintf("[地図で見る](%s)", wplaceURL),
+				Inline: false,
+			},
+		},
+		Image: &discordgo.MessageEmbedImage{
+			URL: "attachment://" + filename,
+		},
+	}
+	return embed, buf, filename, nil
+}
+
+func downloadRegionTile(ctx context.Context, limiter *utils.RateLimiter, tlx, tly int) ([]byte, error) {
+	if limiter == nil {
+		return nil, fmt.Errorf("rate limiter is nil")
+	}
+	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tlx, tly)
+	val, err := limiter.Do(ctx, "backend.wplace.live", func() (interface{}, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := tileHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("HTTP GET failed for %s: %w", url, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("failed to download tile %d-%d (URL: %s), status: %s", tlx, tly, url, resp.Status)
+		}
+		return io.ReadAll(resp.Body)
+	})
+	if err != nil {
+		return nil, err
+	}
+	data, ok := val.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tlx, tly)
+	}
+	return data, nil
 }
 
 func searchRegionsByCity(database RegionDB, cityName string) map[string]Region {
@@ -784,10 +992,9 @@ func buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, zoom int) *im
 		if tile == nil {
 			continue
 		}
-		tileRGBA := toNRGBA(tile)
 		xOffset := (key.x - minTX) * regionMapTileSize
 		yOffset := (key.y - minTY) * regionMapTileSize
-		draw.Draw(baseMap, image.Rect(xOffset, yOffset, xOffset+regionMapTileSize, yOffset+regionMapTileSize), tileRGBA, image.Point{}, draw.Src)
+		draw.Draw(baseMap, image.Rect(xOffset, yOffset, xOffset+regionMapTileSize, yOffset+regionMapTileSize), tile, image.Point{}, draw.Src)
 	}
 	return baseMap
 }
@@ -891,7 +1098,7 @@ type tileKey struct {
 type RegionMapGenerator struct {
 	client    *http.Client
 	userAgent string
-	cache     map[string]image.Image
+	cache     map[string]*image.NRGBA
 	mu        sync.Mutex
 	rr        int
 }
@@ -913,12 +1120,12 @@ func newRegionMapGenerator() *RegionMapGenerator {
 			Transport: transport,
 		},
 		userAgent: regionMapUserAgent,
-		cache:     make(map[string]image.Image),
+		cache:     make(map[string]*image.NRGBA),
 	}
 }
 
-func (g *RegionMapGenerator) fetchTiles(minTX, maxTX, minTY, maxTY, zoom int) map[tileKey]image.Image {
-	result := make(map[tileKey]image.Image)
+func (g *RegionMapGenerator) fetchTiles(minTX, maxTX, minTY, maxTY, zoom int) map[tileKey]*image.NRGBA {
+	result := make(map[tileKey]*image.NRGBA)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, regionMapMaxConcurrent)
@@ -943,7 +1150,7 @@ func (g *RegionMapGenerator) fetchTiles(minTX, maxTX, minTY, maxTY, zoom int) ma
 	return result
 }
 
-func (g *RegionMapGenerator) getTile(ctx context.Context, zoom, x, y int) (image.Image, error) {
+func (g *RegionMapGenerator) getTile(ctx context.Context, zoom, x, y int) (*image.NRGBA, error) {
 	cacheKey := fmt.Sprintf("%d/%d/%d", zoom, x, y)
 	g.mu.Lock()
 	if img, ok := g.cache[cacheKey]; ok {
@@ -969,15 +1176,16 @@ func (g *RegionMapGenerator) getTile(ctx context.Context, zoom, x, y int) (image
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tile fetch failed: %s", resp.Status)
 	}
-	img, _, err := image.Decode(resp.Body)
+	img, err := png.Decode(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+	tile := toNRGBA(img)
 
 	g.mu.Lock()
-	g.cache[cacheKey] = img
+	g.cache[cacheKey] = tile
 	g.mu.Unlock()
-	return img, nil
+	return tile, nil
 }
 
 func (g *RegionMapGenerator) nextSubdomain() string {
