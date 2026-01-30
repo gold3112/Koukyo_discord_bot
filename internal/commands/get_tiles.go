@@ -10,14 +10,48 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 )
 
-var tileHTTPClient = &http.Client{Timeout: 12 * time.Second}
+const (
+	getTileCacheTTL      = 2 * time.Minute
+	getTileMaxConcurrent = 16
+)
+
+var tileHTTPClient = &http.Client{
+	Timeout: 12 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32,
+		MaxConnsPerHost:       32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
+
+type tileCacheEntry struct {
+	data      []byte
+	expiresAt time.Time
+}
+
+var tileCache struct {
+	mu    sync.Mutex
+	items map[string]tileCacheEntry
+}
+
+func init() {
+	tileCache.items = make(map[string]tileCacheEntry)
+}
 
 // downloadTile 単一のタイル画像をダウンロードするヘルパー関数
 func (c *GetCommand) downloadTile(ctx context.Context, tlx, tly int) ([]byte, error) {
 	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tlx, tly)
+	cacheKey := fmt.Sprintf("%d-%d", tlx, tly)
+	if data, ok := getTileFromCache(cacheKey); ok {
+		return data, nil
+	}
 
 	val, err := c.limiter.Do(ctx, "backend.wplace.live", func() (interface{}, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -41,7 +75,84 @@ func (c *GetCommand) downloadTile(ctx context.Context, tlx, tly int) ([]byte, er
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tlx, tly)
 	}
+	if len(data) > 0 {
+		storeTileCache(cacheKey, data)
+	}
 	return data, nil
+}
+
+func getTileFromCache(key string) ([]byte, bool) {
+	tileCache.mu.Lock()
+	defer tileCache.mu.Unlock()
+	entry, ok := tileCache.items[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(tileCache.items, key)
+		return nil, false
+	}
+	return entry.data, true
+}
+
+func storeTileCache(key string, data []byte) {
+	tileCache.mu.Lock()
+	defer tileCache.mu.Unlock()
+	tileCache.items[key] = tileCacheEntry{
+		data:      data,
+		expiresAt: time.Now().Add(getTileCacheTTL),
+	}
+}
+
+func (c *GetCommand) downloadTilesGrid(ctx context.Context, minX, minY, cols, rows int) ([][]byte, error) {
+	total := cols * rows
+	tiles := make([][]byte, total)
+	sem := make(chan struct{}, getTileMaxConcurrent)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for y := 0; y < rows; y++ {
+		for x := 0; x < cols; x++ {
+			tileX := minX + x
+			tileY := minY + y
+			idx := y*cols + x
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(ix, iy, index int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if ctx.Err() != nil {
+					return
+				}
+				reqCtx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
+				data, err := c.downloadTile(reqCtx, ix, iy)
+				cancelReq()
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					mu.Unlock()
+					return
+				}
+				tiles[index] = data
+			}(tileX, tileY, idx)
+		}
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	for i, data := range tiles {
+		if len(data) == 0 {
+			return nil, fmt.Errorf("タイル画像のダウンロードに失敗しました (index=%d)", i)
+		}
+	}
+	return tiles, nil
 }
 
 // combineTiles 複数のタイル画像を結合するヘルパー関数

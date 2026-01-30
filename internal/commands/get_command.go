@@ -107,7 +107,7 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		if err := respondDeferred(s, i); err != nil {
 			return err
 		}
-		db, err := loadRegionDB(regionDBURL)
+		db, err := loadRegionDBCached()
 		if err != nil {
 			return followupMessage(s, i, "Regionデータベースの読み込みに失敗しました。")
 		}
@@ -127,17 +127,11 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 			return followupMessage(s, i, "❌ Regionタイル範囲が無効です。")
 		}
 
-		tilesData := make([][]byte, 0, gridCols*gridRows)
-		for ty := minTileY; ty <= maxTileY; ty++ {
-			for tx := minTileX; tx <= maxTileX; tx++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				data, err := c.downloadTile(ctx, tx, ty)
-				cancel()
-				if err != nil {
-					return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
-				}
-				tilesData = append(tilesData, data)
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		tilesData, err := c.downloadTilesGrid(ctx, minTileX, minTileY, gridCols, gridRows)
+		cancel()
+		if err != nil {
+			return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 		}
 
 		buf, err := combineTiles(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, gridCols, gridRows)
@@ -293,17 +287,11 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 			return followupMessage(s, i, "❌ タイル範囲が無効です。")
 		}
 
-		tilesData := make([][]byte, 0, totalTiles)
-		for ty := 0; ty < tilesY; ty++ {
-			for tx := 0; tx < tilesX; tx++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				data, err := c.downloadTile(ctx, startTileX+tx, startTileY+ty)
-				cancel()
-				if err != nil {
-					return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
-				}
-				tilesData = append(tilesData, data)
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		tilesData, err := c.downloadTilesGrid(ctx, startTileX, startTileY, tilesX, tilesY)
+		cancel()
+		if err != nil {
+			return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 		}
 
 		combinedImg, err := combineTilesImage(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, tilesX, tilesY)

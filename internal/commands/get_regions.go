@@ -7,10 +7,18 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 const regionDBURL = "https://gold3112.online/tools/region-viewer/region_database.json"
+const regionDBCacheTTL = 2 * time.Minute
+
+var regionDBCache struct {
+	mu        sync.Mutex
+	data      RegionDB
+	fetchedAt time.Time
+}
 
 type Region struct {
 	RegionID     int             `json:"region_id"`
@@ -45,6 +53,21 @@ func loadRegionDB(path string) (RegionDB, error) {
 	if err := json.Unmarshal(bytes, &db); err != nil {
 		return nil, err
 	}
+	return db, nil
+}
+
+func loadRegionDBCached() (RegionDB, error) {
+	regionDBCache.mu.Lock()
+	defer regionDBCache.mu.Unlock()
+	if regionDBCache.data != nil && time.Since(regionDBCache.fetchedAt) < regionDBCacheTTL {
+		return regionDBCache.data, nil
+	}
+	db, err := loadRegionDB(regionDBURL)
+	if err != nil {
+		return nil, err
+	}
+	regionDBCache.data = db
+	regionDBCache.fetchedAt = time.Now()
 	return db, nil
 }
 

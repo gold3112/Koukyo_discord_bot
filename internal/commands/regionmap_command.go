@@ -45,7 +45,6 @@ const (
 	regionMapTitleFontSize   = 20
 	regionMapTitleFontSizeSM = 16
 	regionMapMaxConcurrent   = 32
-	regionMapDBCacheTTL      = 2 * time.Minute
 	regionMapBaseCacheMax    = 8
 	regionMapOverlayCacheMax = 8
 
@@ -59,14 +58,6 @@ type RegionMapCommand struct{}
 func NewRegionMapCommand() *RegionMapCommand {
 	return &RegionMapCommand{}
 }
-
-type regionDBCache struct {
-	mu        sync.Mutex
-	data      RegionDB
-	fetchedAt time.Time
-}
-
-var regionMapDBCache regionDBCache
 
 type baseMapKey struct {
 	city string
@@ -196,7 +187,7 @@ func HandleRegionMapConfirm(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 	go func() {
-		db, err := getRegionDBCached()
+		db, err := loadRegionDBCached()
 		if err != nil {
 			_ = followupMessage(s, i, "❌ Regionデータベースの読み込みに失敗しました")
 			return
@@ -216,7 +207,7 @@ func HandleRegionMapConfirm(s *discordgo.Session, i *discordgo.InteractionCreate
 }
 
 func buildRegionMapMessage(query string, page int, highlight string) (*discordgo.MessageEmbed, *discordgo.File, []discordgo.MessageComponent, error) {
-	db, err := getRegionDBCached()
+	db, err := loadRegionDBCached()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("Regionデータベースの読み込みに失敗しました")
 	}
@@ -257,21 +248,6 @@ func buildRegionMapMessage(query string, page int, highlight string) (*discordgo
 
 	components := buildRegionMapComponents(query, names, page, highlight)
 	return embed, file, components, nil
-}
-
-func getRegionDBCached() (RegionDB, error) {
-	regionMapDBCache.mu.Lock()
-	defer regionMapDBCache.mu.Unlock()
-	if regionMapDBCache.data != nil && time.Since(regionMapDBCache.fetchedAt) < regionMapDBCacheTTL {
-		return regionMapDBCache.data, nil
-	}
-	db, err := loadRegionDB(regionDBURL)
-	if err != nil {
-		return nil, err
-	}
-	regionMapDBCache.data = db
-	regionMapDBCache.fetchedAt = time.Now()
-	return db, nil
 }
 
 func buildRegionMapComponents(query string, names []string, page int, highlight string) []discordgo.MessageComponent {
@@ -643,30 +619,7 @@ func parseRegionNumber(name string) (int, bool) {
 }
 
 func generateRegionMapImage(cityName string, regions map[string]Region, highlight string) ([]byte, string, string, error) {
-	minRX, maxRX, minRY, maxRY, ok := calculateRegionBounds(regions)
-	if !ok {
-		return nil, "", "", fmt.Errorf("Region座標が不正です")
-	}
-
-	minTX := minRX * 4
-	maxTX := (maxRX+1)*4 - 1
-	minTY := minRY * 4
-	maxTY := (maxRY+1)*4 - 1
-
-	tileWidth := maxTX - minTX + 1
-	tileHeight := maxTY - minTY + 1
-	if tileWidth > regionMapMaxTiles || tileHeight > regionMapMaxTiles {
-		return generateSimplifiedRegionMap(cityName, regions, highlight)
-	}
-
-	data, err := generateFullRegionMap(cityName, regions, highlight, minTX, maxTX, minTY, maxTY)
-	if err != nil {
-		return generateSimplifiedRegionMap(cityName, regions, highlight)
-	}
-	if len(data) > regionMapMaxBytes {
-		return generateSimplifiedRegionMap(cityName, regions, highlight)
-	}
-	return data, "image/png", "region_map.png", nil
+	return generateSimplifiedRegionMap(cityName, regions, highlight)
 }
 
 func generateFullRegionMap(cityName string, regions map[string]Region, highlight string, minTX, maxTX, minTY, maxTY int) ([]byte, error) {
