@@ -44,6 +44,7 @@ const (
 	regionMapMaxConcurrent   = 16
 	regionMapDBCacheTTL      = 2 * time.Minute
 	regionMapBaseCacheMax    = 8
+	regionMapOverlayCacheMax = 8
 
 	regionMapSelectPrefix = "regionmap_select:"
 	regionMapPagePrefix   = "regionmap_page:"
@@ -74,11 +75,32 @@ type baseMapKey struct {
 
 type baseMapCache struct {
 	mu    sync.Mutex
-	items map[baseMapKey]*image.RGBA
+	items map[baseMapKey]*image.NRGBA
 }
 
 var regionMapBaseCache = baseMapCache{
-	items: make(map[baseMapKey]*image.RGBA),
+	items: make(map[baseMapKey]*image.NRGBA),
+}
+
+type overlayKey struct {
+	city       string
+	zoom       int
+	minX       int
+	maxX       int
+	minY       int
+	maxY       int
+	minRX      int
+	minRY      int
+	simplified bool
+}
+
+type overlayCache struct {
+	mu    sync.Mutex
+	items map[overlayKey]*image.NRGBA
+}
+
+var regionMapOverlayCache = overlayCache{
+	items: make(map[overlayKey]*image.NRGBA),
 }
 
 func (c *RegionMapCommand) Name() string { return "regionmap" }
@@ -138,20 +160,7 @@ func HandleRegionMapPagination(s *discordgo.Session, i *discordgo.InteractionCre
 	})
 	go func() {
 		embed, file, components, err := buildRegionMapMessage(query, page, "")
-		if err != nil {
-			msg := "❌ エラー: " + err.Error()
-			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content: &msg,
-			})
-			return
-		}
-		embeds := []*discordgo.MessageEmbed{embed}
-		comps := components
-		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Embeds:     &embeds,
-			Components: &comps,
-			Files:      buildOptionalFiles(file),
-		})
+		editRegionMapResponse(s, i, embed, file, components, err)
 	}()
 }
 
@@ -170,20 +179,7 @@ func HandleRegionMapSelect(s *discordgo.Session, i *discordgo.InteractionCreate)
 	})
 	go func() {
 		embed, file, components, err := buildRegionMapMessage(query, page, highlight)
-		if err != nil {
-			msg := "❌ エラー: " + err.Error()
-			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content: &msg,
-			})
-			return
-		}
-		embeds := []*discordgo.MessageEmbed{embed}
-		comps := components
-		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Embeds:     &embeds,
-			Components: &comps,
-			Files:      buildOptionalFiles(file),
-		})
+		editRegionMapResponse(s, i, embed, file, components, err)
 	}()
 }
 
@@ -302,6 +298,33 @@ func sendRegionMapFollowup(s *discordgo.Session, i *discordgo.InteractionCreate,
 	}
 	_, err := s.FollowupMessageCreate(i.Interaction, false, params)
 	return err
+}
+
+func editRegionMapResponse(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed, file *discordgo.File, components []discordgo.MessageComponent, buildErr error) {
+	if buildErr != nil {
+		msg := "❌ エラー: " + buildErr.Error()
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Content: &msg,
+		})
+		return
+	}
+	embeds := []*discordgo.MessageEmbed{embed}
+	comps := components
+	edit := &discordgo.WebhookEdit{
+		Embeds:     &embeds,
+		Components: &comps,
+	}
+	if file != nil {
+		edit.Files = []*discordgo.File{file}
+		attachments := []*discordgo.MessageAttachment{
+			{ID: "0", Filename: file.Name},
+		}
+		edit.Attachments = &attachments
+	} else {
+		attachments := []*discordgo.MessageAttachment{}
+		edit.Attachments = &attachments
+	}
+	_, _ = s.InteractionResponseEdit(i.Interaction, edit)
 }
 
 func parseRegionMapCustomID(customID, prefix string) (string, int, bool) {
@@ -456,7 +479,28 @@ func generateFullRegionMap(cityName string, regions map[string]Region, highlight
 		baseMap = buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, regionMapZoom)
 		storeBaseMapCached(key, baseMap)
 	}
-	baseMap = cloneRGBA(baseMap)
+	baseMap = cloneNRGBA(baseMap)
+
+	overlay := getOverlayCached(overlayKey{
+		city: cityNameLower(cityName),
+		zoom: regionMapZoom,
+		minX: minTX,
+		maxX: maxTX,
+		minY: minTY,
+		maxY: maxTY,
+	})
+	if overlay == nil {
+		overlay = buildFullOverlay(mapWidth, mapHeight, minTX, minTY, regions)
+		storeOverlayCached(overlayKey{
+			city: cityNameLower(cityName),
+			zoom: regionMapZoom,
+			minX: minTX,
+			maxX: maxTX,
+			minY: minTY,
+			maxY: maxTY,
+		}, overlay)
+	}
+	draw.Draw(baseMap, baseMap.Bounds(), overlay, image.Point{}, draw.Over)
 
 	for regionName, info := range regions {
 		rx, ry := info.RegionCoords[0], info.RegionCoords[1]
@@ -465,27 +509,19 @@ func generateFullRegionMap(cityName string, regions map[string]Region, highlight
 		x2 := x1 + 4*regionMapTileSize
 		y2 := y1 + 4*regionMapTileSize
 
-		isHighlighted := regionName == highlight
-		var overlay, border color.RGBA
-		borderWidth := 4
-		if isHighlighted {
-			overlay = color.RGBA{255, 215, 0, 100}
-			border = color.RGBA{255, 165, 0, 255}
-			borderWidth = 8
-		} else {
-			overlay = color.RGBA{100, 149, 237, 60}
-			border = color.RGBA{70, 130, 220, 200}
+		if regionName == highlight {
+			highlightOverlay := color.NRGBA{255, 215, 0, 100}
+			highlightBorder := color.NRGBA{255, 165, 0, 255}
+			fillRect(baseMap, x1, y1, x2, y2, highlightOverlay)
+			strokeRect(baseMap, x1, y1, x2, y2, highlightBorder, 8)
+			numText := regionLabel(regionName, info)
+			drawCenteredText(baseMap, numText, x1, y1, x2, y2, true, regionMapFontSize)
 		}
-		fillRect(baseMap, x1, y1, x2, y2, overlay)
-		strokeRect(baseMap, x1, y1, x2, y2, border, borderWidth)
-
-		numText := regionLabel(regionName, info)
-		drawCenteredText(baseMap, numText, x1, y1, x2, y2, isHighlighted, regionMapFontSize)
 	}
 
 	titleHeight := regionMapTitleHeight
-	finalImage := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight+titleHeight))
-	draw.Draw(finalImage, finalImage.Bounds(), &image.Uniform{C: color.RGBA{0x2C, 0x3E, 0x50, 0xFF}}, image.Point{}, draw.Src)
+	finalImage := image.NewNRGBA(image.Rect(0, 0, mapWidth, mapHeight+titleHeight))
+	draw.Draw(finalImage, finalImage.Bounds(), &image.Uniform{C: color.NRGBA{0x2C, 0x3E, 0x50, 0xFF}}, image.Point{}, draw.Src)
 	draw.Draw(finalImage, image.Rect(0, titleHeight, mapWidth, mapHeight+titleHeight), baseMap, image.Point{}, draw.Src)
 	title := fmt.Sprintf("🗾 %s Region Map (%d regions)", cityName, len(regions))
 	drawTitle(finalImage, title, mapWidth, titleHeight, regionMapTitleFontSize)
@@ -527,7 +563,25 @@ func generateSimplifiedRegionMap(cityName string, regions map[string]Region, hig
 		baseMap = buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, regionMapSimplifiedZoom)
 		storeBaseMapCached(key, baseMap)
 	}
-	baseMap = cloneRGBA(baseMap)
+	baseMap = cloneNRGBA(baseMap)
+
+	overlayKey := overlayKey{
+		city:       cityNameLower(cityName),
+		zoom:       regionMapSimplifiedZoom,
+		minX:       minTX,
+		maxX:       maxTX,
+		minY:       minTY,
+		maxY:       maxTY,
+		minRX:      minRX,
+		minRY:      minRY,
+		simplified: true,
+	}
+	overlay := getOverlayCached(overlayKey)
+	if overlay == nil {
+		overlay = buildSimplifiedOverlay(mapWidth, mapHeight, minRX, minRY, regions)
+		storeOverlayCached(overlayKey, overlay)
+	}
+	draw.Draw(baseMap, baseMap.Bounds(), overlay, image.Point{}, draw.Over)
 
 	cellSize := regionMapTileSize / scale
 	for regionName, info := range regions {
@@ -539,26 +593,19 @@ func generateSimplifiedRegionMap(cityName string, regions map[string]Region, hig
 		x2 := x1 + cellSize
 		y2 := y1 + cellSize
 
-		isHighlighted := regionName == highlight
-		var overlay, border color.RGBA
-		borderWidth := 2
-		if isHighlighted {
-			overlay = color.RGBA{255, 215, 0, 100}
-			border = color.RGBA{255, 140, 0, 200}
-		} else {
-			overlay = color.RGBA{100, 149, 237, 50}
-			border = color.RGBA{70, 130, 220, 150}
+		if regionName == highlight {
+			highlightOverlay := color.NRGBA{255, 215, 0, 100}
+			highlightBorder := color.NRGBA{255, 140, 0, 200}
+			fillRect(baseMap, x1, y1, x2, y2, highlightOverlay)
+			strokeRect(baseMap, x1, y1, x2, y2, highlightBorder, 2)
+			numText := regionLabel(regionName, info)
+			drawCenteredText(baseMap, numText, x1, y1, x2, y2, true, regionMapFontSizeSM)
 		}
-		fillRect(baseMap, x1, y1, x2, y2, overlay)
-		strokeRect(baseMap, x1, y1, x2, y2, border, borderWidth)
-
-		numText := regionLabel(regionName, info)
-		drawCenteredText(baseMap, numText, x1, y1, x2, y2, isHighlighted, regionMapFontSizeSM)
 	}
 
 	titleHeight := regionMapTitleHeightSM
-	finalImage := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight+titleHeight))
-	draw.Draw(finalImage, finalImage.Bounds(), &image.Uniform{C: color.RGBA{0x2C, 0x3E, 0x50, 0xFF}}, image.Point{}, draw.Src)
+	finalImage := image.NewNRGBA(image.Rect(0, 0, mapWidth, mapHeight+titleHeight))
+	draw.Draw(finalImage, finalImage.Bounds(), &image.Uniform{C: color.NRGBA{0x2C, 0x3E, 0x50, 0xFF}}, image.Point{}, draw.Src)
 	draw.Draw(finalImage, image.Rect(0, titleHeight, mapWidth, mapHeight+titleHeight), baseMap, image.Point{}, draw.Src)
 	title := fmt.Sprintf("🗾 %s Region Map (%d regions) - Simplified", cityName, len(regions))
 	drawTitle(finalImage, title, mapWidth, titleHeight, regionMapTitleFontSizeSM)
@@ -610,12 +657,12 @@ func regionLabel(name string, info Region) string {
 	return "#?"
 }
 
-func fillRect(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA) {
+func fillRect(img draw.Image, x1, y1, x2, y2 int, c color.NRGBA) {
 	rect := image.Rect(x1, y1, x2, y2)
 	draw.Draw(img, rect, &image.Uniform{C: c}, image.Point{}, draw.Over)
 }
 
-func strokeRect(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA, width int) {
+func strokeRect(img draw.Image, x1, y1, x2, y2 int, c color.NRGBA, width int) {
 	if width <= 0 {
 		width = 1
 	}
@@ -631,7 +678,7 @@ func strokeRect(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA, width int) {
 	}
 }
 
-func drawCenteredText(img *image.RGBA, text string, x1, y1, x2, y2 int, highlight bool, size float64) {
+func drawCenteredText(img draw.Image, text string, x1, y1, x2, y2 int, highlight bool, size float64) {
 	face := resolveFontFace(size, basicfont.Face7x13)
 	textWidth := font.MeasureString(face, text).Ceil()
 	textHeight := face.Metrics().Height.Ceil()
@@ -640,7 +687,7 @@ func drawCenteredText(img *image.RGBA, text string, x1, y1, x2, y2 int, highligh
 	textX := x1 + (x2-x1-textWidth)/2
 	textY := y1 + (y2-y1-textHeight)/2 + ascent
 
-	outline := color.RGBA{255, 255, 255, 255}
+	outline := color.NRGBA{255, 255, 255, 255}
 	for _, dx := range []int{-2, 0, 2} {
 		for _, dy := range []int{-2, 0, 2} {
 			if dx == 0 && dy == 0 {
@@ -649,23 +696,23 @@ func drawCenteredText(img *image.RGBA, text string, x1, y1, x2, y2 int, highligh
 			drawText(img, text, textX+dx, textY+dy, outline, face)
 		}
 	}
-	textColor := color.RGBA{0, 0, 139, 255}
+	textColor := color.NRGBA{0, 0, 139, 255}
 	if highlight {
-		textColor = color.RGBA{255, 140, 0, 255}
+		textColor = color.NRGBA{255, 140, 0, 255}
 	}
 	drawText(img, text, textX, textY, textColor, face)
 }
 
-func drawTitle(img *image.RGBA, text string, width, height int, size float64) {
+func drawTitle(img draw.Image, text string, width, height int, size float64) {
 	face := resolveFontFace(size, basicfont.Face7x13)
 	textWidth := font.MeasureString(face, text).Ceil()
 	ascent := face.Metrics().Ascent.Ceil()
 	x := (width - textWidth) / 2
 	y := (height-ascent)/2 + ascent
-	drawText(img, text, x, y, color.RGBA{255, 255, 255, 255}, face)
+	drawText(img, text, x, y, color.NRGBA{255, 255, 255, 255}, face)
 }
 
-func drawText(img *image.RGBA, text string, x, y int, c color.RGBA, face font.Face) {
+func drawText(img draw.Image, text string, x, y int, c color.NRGBA, face font.Face) {
 	d := &font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(c),
@@ -729,15 +776,15 @@ func encodeRegionMap(img image.Image) ([]byte, string, string, error) {
 	return buf.Bytes(), "image/jpeg", "region_map.jpg", nil
 }
 
-func buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, zoom int) *image.RGBA {
-	baseMap := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight))
-	draw.Draw(baseMap, baseMap.Bounds(), &image.Uniform{C: color.RGBA{0xE8, 0xE8, 0xE8, 0xFF}}, image.Point{}, draw.Src)
+func buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, zoom int) *image.NRGBA {
+	baseMap := image.NewNRGBA(image.Rect(0, 0, mapWidth, mapHeight))
+	draw.Draw(baseMap, baseMap.Bounds(), &image.Uniform{C: color.NRGBA{0xE8, 0xE8, 0xE8, 0xFF}}, image.Point{}, draw.Src)
 	tiles := regionMapGenerator.fetchTiles(minTX, maxTX, minTY, maxTY, zoom)
 	for key, tile := range tiles {
 		if tile == nil {
 			continue
 		}
-		tileRGBA := toRGBA(tile)
+		tileRGBA := toNRGBA(tile)
 		xOffset := (key.x - minTX) * regionMapTileSize
 		yOffset := (key.y - minTY) * regionMapTileSize
 		draw.Draw(baseMap, image.Rect(xOffset, yOffset, xOffset+regionMapTileSize, yOffset+regionMapTileSize), tileRGBA, image.Point{}, draw.Src)
@@ -745,7 +792,64 @@ func buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, zoom int) *im
 	return baseMap
 }
 
-func getBaseMapCached(key baseMapKey) *image.RGBA {
+func buildFullOverlay(mapWidth, mapHeight, minTX, minTY int, regions map[string]Region) *image.NRGBA {
+	overlay := image.NewNRGBA(image.Rect(0, 0, mapWidth, mapHeight))
+	for regionName, info := range regions {
+		rx, ry := info.RegionCoords[0], info.RegionCoords[1]
+		x1 := (rx*4 - minTX) * regionMapTileSize
+		y1 := (ry*4 - minTY) * regionMapTileSize
+		x2 := x1 + 4*regionMapTileSize
+		y2 := y1 + 4*regionMapTileSize
+		fillRect(overlay, x1, y1, x2, y2, color.NRGBA{100, 149, 237, 60})
+		strokeRect(overlay, x1, y1, x2, y2, color.NRGBA{70, 130, 220, 200}, 4)
+		numText := regionLabel(regionName, info)
+		drawCenteredText(overlay, numText, x1, y1, x2, y2, false, regionMapFontSize)
+	}
+	return overlay
+}
+
+func buildSimplifiedOverlay(mapWidth, mapHeight, minRX, minRY int, regions map[string]Region) *image.NRGBA {
+	overlay := image.NewNRGBA(image.Rect(0, 0, mapWidth, mapHeight))
+	cellSize := regionMapTileSize / 4
+	for regionName, info := range regions {
+		rx, ry := info.RegionCoords[0], info.RegionCoords[1]
+		col := rx - minRX
+		row := ry - minRY
+		x1 := col * cellSize
+		y1 := row * cellSize
+		x2 := x1 + cellSize
+		y2 := y1 + cellSize
+		fillRect(overlay, x1, y1, x2, y2, color.NRGBA{100, 149, 237, 50})
+		strokeRect(overlay, x1, y1, x2, y2, color.NRGBA{70, 130, 220, 150}, 2)
+		numText := regionLabel(regionName, info)
+		drawCenteredText(overlay, numText, x1, y1, x2, y2, false, regionMapFontSizeSM)
+	}
+	return overlay
+}
+
+func cityNameLower(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func getOverlayCached(key overlayKey) *image.NRGBA {
+	regionMapOverlayCache.mu.Lock()
+	defer regionMapOverlayCache.mu.Unlock()
+	if img, ok := regionMapOverlayCache.items[key]; ok {
+		return img
+	}
+	return nil
+}
+
+func storeOverlayCached(key overlayKey, img *image.NRGBA) {
+	regionMapOverlayCache.mu.Lock()
+	defer regionMapOverlayCache.mu.Unlock()
+	if len(regionMapOverlayCache.items) >= regionMapOverlayCacheMax {
+		regionMapOverlayCache.items = make(map[overlayKey]*image.NRGBA)
+	}
+	regionMapOverlayCache.items[key] = img
+}
+
+func getBaseMapCached(key baseMapKey) *image.NRGBA {
 	regionMapBaseCache.mu.Lock()
 	defer regionMapBaseCache.mu.Unlock()
 	if img, ok := regionMapBaseCache.items[key]; ok {
@@ -754,27 +858,27 @@ func getBaseMapCached(key baseMapKey) *image.RGBA {
 	return nil
 }
 
-func storeBaseMapCached(key baseMapKey, img *image.RGBA) {
+func storeBaseMapCached(key baseMapKey, img *image.NRGBA) {
 	regionMapBaseCache.mu.Lock()
 	defer regionMapBaseCache.mu.Unlock()
 	if len(regionMapBaseCache.items) >= regionMapBaseCacheMax {
-		regionMapBaseCache.items = make(map[baseMapKey]*image.RGBA)
+		regionMapBaseCache.items = make(map[baseMapKey]*image.NRGBA)
 	}
 	regionMapBaseCache.items[key] = img
 }
 
-func toRGBA(src image.Image) *image.RGBA {
+func toNRGBA(src image.Image) *image.NRGBA {
 	b := src.Bounds()
-	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
 	return dst
 }
 
-func cloneRGBA(src *image.RGBA) *image.RGBA {
+func cloneNRGBA(src *image.NRGBA) *image.NRGBA {
 	if src == nil {
 		return nil
 	}
-	dst := image.NewRGBA(src.Bounds())
+	dst := image.NewNRGBA(src.Bounds())
 	copy(dst.Pix, src.Pix)
 	return dst
 }
