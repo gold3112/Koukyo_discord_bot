@@ -20,19 +20,30 @@ import (
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 const (
-	regionMapZoom           = 11
-	regionMapSimplifiedZoom = 7
-	regionMapTileSize       = 256
-	regionMapUserAgent      = "WplaceDiscordBot/2.3.1"
-	regionMapMaxTiles       = 32
-	regionMapMaxBytes       = 8 * 1024 * 1024
-	regionMapPageSize       = 25
+	regionMapZoom            = 11
+	regionMapSimplifiedZoom  = 7
+	regionMapTileSize        = 256
+	regionMapUserAgent       = "WplaceDiscordBot/2.3.1"
+	regionMapMaxTiles        = 32
+	regionMapMaxBytes        = 8 * 1024 * 1024
+	regionMapPageSize        = 25
+	regionMapTitleHeight     = 80
+	regionMapTitleHeightSM   = 60
+	regionMapFontSize        = 48
+	regionMapFontSizeSM      = 18
+	regionMapTitleFontSize   = 20
+	regionMapTitleFontSizeSM = 16
+	regionMapMaxConcurrent   = 16
+	regionMapDBCacheTTL      = 2 * time.Minute
+	regionMapBaseCacheMax    = 8
 
 	regionMapSelectPrefix = "regionmap_select:"
 	regionMapPagePrefix   = "regionmap_page:"
@@ -42,6 +53,32 @@ type RegionMapCommand struct{}
 
 func NewRegionMapCommand() *RegionMapCommand {
 	return &RegionMapCommand{}
+}
+
+type regionDBCache struct {
+	mu        sync.Mutex
+	data      RegionDB
+	fetchedAt time.Time
+}
+
+var regionMapDBCache regionDBCache
+
+type baseMapKey struct {
+	city string
+	zoom int
+	minX int
+	maxX int
+	minY int
+	maxY int
+}
+
+type baseMapCache struct {
+	mu    sync.Mutex
+	items map[baseMapKey]*image.RGBA
+}
+
+var regionMapBaseCache = baseMapCache{
+	items: make(map[baseMapKey]*image.RGBA),
 }
 
 func (c *RegionMapCommand) Name() string { return "regionmap" }
@@ -96,25 +133,26 @@ func HandleRegionMapPagination(s *discordgo.Session, i *discordgo.InteractionCre
 	if !ok {
 		return
 	}
-	embed, file, components, err := buildRegionMapMessage(query, page, "")
-	if err != nil {
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "❌ エラー: " + err.Error(),
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Embeds:     []*discordgo.MessageEmbed{embed},
-			Files:      buildOptionalFiles(file),
-			Components: components,
-		},
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
 	})
+	go func() {
+		embed, file, components, err := buildRegionMapMessage(query, page, "")
+		if err != nil {
+			msg := "❌ エラー: " + err.Error()
+			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: &msg,
+			})
+			return
+		}
+		embeds := []*discordgo.MessageEmbed{embed}
+		comps := components
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Embeds:     &embeds,
+			Components: &comps,
+			Files:      buildOptionalFiles(file),
+		})
+	}()
 }
 
 func HandleRegionMapSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -127,29 +165,30 @@ func HandleRegionMapSelect(s *discordgo.Session, i *discordgo.InteractionCreate)
 		return
 	}
 	highlight := values[0]
-	embed, file, components, err := buildRegionMapMessage(query, page, highlight)
-	if err != nil {
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "❌ エラー: " + err.Error(),
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Embeds:     []*discordgo.MessageEmbed{embed},
-			Files:      buildOptionalFiles(file),
-			Components: components,
-		},
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
 	})
+	go func() {
+		embed, file, components, err := buildRegionMapMessage(query, page, highlight)
+		if err != nil {
+			msg := "❌ エラー: " + err.Error()
+			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: &msg,
+			})
+			return
+		}
+		embeds := []*discordgo.MessageEmbed{embed}
+		comps := components
+		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Embeds:     &embeds,
+			Components: &comps,
+			Files:      buildOptionalFiles(file),
+		})
+	}()
 }
 
 func buildRegionMapMessage(query string, page int, highlight string) (*discordgo.MessageEmbed, *discordgo.File, []discordgo.MessageComponent, error) {
-	db, err := loadRegionDB(regionDBURL)
+	db, err := getRegionDBCached()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("Regionデータベースの読み込みに失敗しました")
 	}
@@ -190,6 +229,21 @@ func buildRegionMapMessage(query string, page int, highlight string) (*discordgo
 
 	components := buildRegionMapComponents(query, names, page)
 	return embed, file, components, nil
+}
+
+func getRegionDBCached() (RegionDB, error) {
+	regionMapDBCache.mu.Lock()
+	defer regionMapDBCache.mu.Unlock()
+	if regionMapDBCache.data != nil && time.Since(regionMapDBCache.fetchedAt) < regionMapDBCacheTTL {
+		return regionMapDBCache.data, nil
+	}
+	db, err := loadRegionDB(regionDBURL)
+	if err != nil {
+		return nil, err
+	}
+	regionMapDBCache.data = db
+	regionMapDBCache.fetchedAt = time.Now()
+	return db, nil
 }
 
 func buildRegionMapComponents(query string, names []string, page int) []discordgo.MessageComponent {
@@ -389,20 +443,20 @@ func generateFullRegionMap(cityName string, regions map[string]Region, highlight
 	tileHeight := maxTY - minTY + 1
 	mapWidth := tileWidth * regionMapTileSize
 	mapHeight := tileHeight * regionMapTileSize
-
-	baseMap := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight))
-	draw.Draw(baseMap, baseMap.Bounds(), &image.Uniform{C: color.RGBA{0xE8, 0xE8, 0xE8, 0xFF}}, image.Point{}, draw.Src)
-
-	gen := newRegionMapGenerator()
-	tiles := gen.fetchTiles(minTX, maxTX, minTY, maxTY, regionMapZoom)
-	for key, tile := range tiles {
-		if tile == nil {
-			continue
-		}
-		xOffset := (key.x - minTX) * regionMapTileSize
-		yOffset := (key.y - minTY) * regionMapTileSize
-		draw.Draw(baseMap, image.Rect(xOffset, yOffset, xOffset+regionMapTileSize, yOffset+regionMapTileSize), tile, image.Point{}, draw.Over)
+	key := baseMapKey{
+		city: strings.ToLower(cityName),
+		zoom: regionMapZoom,
+		minX: minTX,
+		maxX: maxTX,
+		minY: minTY,
+		maxY: maxTY,
 	}
+	baseMap := getBaseMapCached(key)
+	if baseMap == nil {
+		baseMap = buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, regionMapZoom)
+		storeBaseMapCached(key, baseMap)
+	}
+	baseMap = cloneRGBA(baseMap)
 
 	for regionName, info := range regions {
 		rx, ry := info.RegionCoords[0], info.RegionCoords[1]
@@ -425,16 +479,16 @@ func generateFullRegionMap(cityName string, regions map[string]Region, highlight
 		fillRect(baseMap, x1, y1, x2, y2, overlay)
 		strokeRect(baseMap, x1, y1, x2, y2, border, borderWidth)
 
-		numText := regionLabel(regionName)
-		drawCenteredText(baseMap, numText, x1, y1, x2, y2, isHighlighted)
+		numText := regionLabel(regionName, info)
+		drawCenteredText(baseMap, numText, x1, y1, x2, y2, isHighlighted, regionMapFontSize)
 	}
 
-	titleHeight := 80
+	titleHeight := regionMapTitleHeight
 	finalImage := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight+titleHeight))
 	draw.Draw(finalImage, finalImage.Bounds(), &image.Uniform{C: color.RGBA{0x2C, 0x3E, 0x50, 0xFF}}, image.Point{}, draw.Src)
 	draw.Draw(finalImage, image.Rect(0, titleHeight, mapWidth, mapHeight+titleHeight), baseMap, image.Point{}, draw.Src)
 	title := fmt.Sprintf("🗾 %s Region Map (%d regions)", cityName, len(regions))
-	drawTitle(finalImage, title, mapWidth, titleHeight)
+	drawTitle(finalImage, title, mapWidth, titleHeight, regionMapTitleFontSize)
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, finalImage); err != nil {
@@ -460,20 +514,20 @@ func generateSimplifiedRegionMap(cityName string, regions map[string]Region, hig
 
 	mapWidth := tilesX * regionMapTileSize
 	mapHeight := tilesY * regionMapTileSize
-
-	baseMap := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight))
-	draw.Draw(baseMap, baseMap.Bounds(), &image.Uniform{C: color.RGBA{240, 240, 240, 255}}, image.Point{}, draw.Src)
-
-	gen := newRegionMapGenerator()
-	tiles := gen.fetchTiles(minTX, maxTX, minTY, maxTY, regionMapSimplifiedZoom)
-	for key, tile := range tiles {
-		if tile == nil {
-			continue
-		}
-		xOffset := (key.x - minTX) * regionMapTileSize
-		yOffset := (key.y - minTY) * regionMapTileSize
-		draw.Draw(baseMap, image.Rect(xOffset, yOffset, xOffset+regionMapTileSize, yOffset+regionMapTileSize), tile, image.Point{}, draw.Over)
+	key := baseMapKey{
+		city: strings.ToLower(cityName),
+		zoom: regionMapSimplifiedZoom,
+		minX: minTX,
+		maxX: maxTX,
+		minY: minTY,
+		maxY: maxTY,
 	}
+	baseMap := getBaseMapCached(key)
+	if baseMap == nil {
+		baseMap = buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, regionMapSimplifiedZoom)
+		storeBaseMapCached(key, baseMap)
+	}
+	baseMap = cloneRGBA(baseMap)
 
 	cellSize := regionMapTileSize / scale
 	for regionName, info := range regions {
@@ -498,22 +552,22 @@ func generateSimplifiedRegionMap(cityName string, regions map[string]Region, hig
 		fillRect(baseMap, x1, y1, x2, y2, overlay)
 		strokeRect(baseMap, x1, y1, x2, y2, border, borderWidth)
 
-		numText := regionLabel(regionName)
-		drawCenteredText(baseMap, numText, x1, y1, x2, y2, isHighlighted)
+		numText := regionLabel(regionName, info)
+		drawCenteredText(baseMap, numText, x1, y1, x2, y2, isHighlighted, regionMapFontSizeSM)
 	}
 
-	titleHeight := 60
+	titleHeight := regionMapTitleHeightSM
 	finalImage := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight+titleHeight))
 	draw.Draw(finalImage, finalImage.Bounds(), &image.Uniform{C: color.RGBA{0x2C, 0x3E, 0x50, 0xFF}}, image.Point{}, draw.Src)
 	draw.Draw(finalImage, image.Rect(0, titleHeight, mapWidth, mapHeight+titleHeight), baseMap, image.Point{}, draw.Src)
 	title := fmt.Sprintf("🗾 %s Region Map (%d regions) - Simplified", cityName, len(regions))
-	drawTitle(finalImage, title, mapWidth, titleHeight)
+	drawTitle(finalImage, title, mapWidth, titleHeight, regionMapTitleFontSizeSM)
 
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, finalImage, &jpeg.Options{Quality: 85}); err != nil {
+	data, contentType, filename, err := encodeRegionMap(finalImage)
+	if err != nil {
 		return nil, "", "", err
 	}
-	return buf.Bytes(), "image/jpeg", "region_map.jpg", nil
+	return data, contentType, filename, nil
 }
 
 func calculateRegionBounds(regions map[string]Region) (int, int, int, int, bool) {
@@ -546,8 +600,11 @@ func calculateRegionBounds(regions map[string]Region) (int, int, int, int, bool)
 	return minRX, maxRX, minRY, maxRY, true
 }
 
-func regionLabel(name string) string {
+func regionLabel(name string, info Region) string {
 	if n, ok := parseRegionNumber(name); ok {
+		return fmt.Sprintf("#%d", n)
+	}
+	if n, ok := parseRegionNumber(info.Name); ok {
 		return fmt.Sprintf("#%d", n)
 	}
 	return "#?"
@@ -574,8 +631,8 @@ func strokeRect(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA, width int) {
 	}
 }
 
-func drawCenteredText(img *image.RGBA, text string, x1, y1, x2, y2 int, highlight bool) {
-	face := basicfont.Face7x13
+func drawCenteredText(img *image.RGBA, text string, x1, y1, x2, y2 int, highlight bool, size float64) {
+	face := resolveFontFace(size, basicfont.Face7x13)
 	textWidth := font.MeasureString(face, text).Ceil()
 	textHeight := face.Metrics().Height.Ceil()
 	ascent := face.Metrics().Ascent.Ceil()
@@ -589,33 +646,137 @@ func drawCenteredText(img *image.RGBA, text string, x1, y1, x2, y2 int, highligh
 			if dx == 0 && dy == 0 {
 				continue
 			}
-			drawText(img, text, textX+dx, textY+dy, outline)
+			drawText(img, text, textX+dx, textY+dy, outline, face)
 		}
 	}
 	textColor := color.RGBA{0, 0, 139, 255}
 	if highlight {
 		textColor = color.RGBA{255, 140, 0, 255}
 	}
-	drawText(img, text, textX, textY, textColor)
+	drawText(img, text, textX, textY, textColor, face)
 }
 
-func drawTitle(img *image.RGBA, text string, width, height int) {
-	face := basicfont.Face7x13
+func drawTitle(img *image.RGBA, text string, width, height int, size float64) {
+	face := resolveFontFace(size, basicfont.Face7x13)
 	textWidth := font.MeasureString(face, text).Ceil()
 	ascent := face.Metrics().Ascent.Ceil()
 	x := (width - textWidth) / 2
 	y := (height-ascent)/2 + ascent
-	drawText(img, text, x, y, color.RGBA{255, 255, 255, 255})
+	drawText(img, text, x, y, color.RGBA{255, 255, 255, 255}, face)
 }
 
-func drawText(img *image.RGBA, text string, x, y int, c color.RGBA) {
+func drawText(img *image.RGBA, text string, x, y int, c color.RGBA, face font.Face) {
 	d := &font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(c),
-		Face: basicfont.Face7x13,
+		Face: face,
 		Dot:  fixed.P(x, y),
 	}
 	d.DrawString(text)
+}
+
+func resolveFontFace(size float64, fallback font.Face) font.Face {
+	face := getGoFontFace(size)
+	if face != nil {
+		return face
+	}
+	return fallback
+}
+
+var (
+	gofontOnce      sync.Once
+	gofontFaceCache = make(map[float64]font.Face)
+	gofontErr       error
+	gofontMu        sync.Mutex
+	gofontData      *opentype.Font
+)
+
+func getGoFontFace(size float64) font.Face {
+	gofontOnce.Do(func() {
+		gofontData, gofontErr = opentype.Parse(goregular.TTF)
+	})
+	if gofontErr != nil || gofontData == nil {
+		return nil
+	}
+	gofontMu.Lock()
+	defer gofontMu.Unlock()
+	if face, ok := gofontFaceCache[size]; ok {
+		return face
+	}
+	face, err := opentype.NewFace(gofontData, &opentype.FaceOptions{
+		Size:    size,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		return nil
+	}
+	gofontFaceCache[size] = face
+	return face
+}
+
+func encodeRegionMap(img image.Image) ([]byte, string, string, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err == nil {
+		if buf.Len() <= regionMapMaxBytes {
+			return buf.Bytes(), "image/png", "region_map.png", nil
+		}
+	}
+	buf.Reset()
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}); err != nil {
+		return nil, "", "", err
+	}
+	return buf.Bytes(), "image/jpeg", "region_map.jpg", nil
+}
+
+func buildBaseMap(mapWidth, mapHeight, minTX, maxTX, minTY, maxTY, zoom int) *image.RGBA {
+	baseMap := image.NewRGBA(image.Rect(0, 0, mapWidth, mapHeight))
+	draw.Draw(baseMap, baseMap.Bounds(), &image.Uniform{C: color.RGBA{0xE8, 0xE8, 0xE8, 0xFF}}, image.Point{}, draw.Src)
+	tiles := regionMapGenerator.fetchTiles(minTX, maxTX, minTY, maxTY, zoom)
+	for key, tile := range tiles {
+		if tile == nil {
+			continue
+		}
+		tileRGBA := toRGBA(tile)
+		xOffset := (key.x - minTX) * regionMapTileSize
+		yOffset := (key.y - minTY) * regionMapTileSize
+		draw.Draw(baseMap, image.Rect(xOffset, yOffset, xOffset+regionMapTileSize, yOffset+regionMapTileSize), tileRGBA, image.Point{}, draw.Src)
+	}
+	return baseMap
+}
+
+func getBaseMapCached(key baseMapKey) *image.RGBA {
+	regionMapBaseCache.mu.Lock()
+	defer regionMapBaseCache.mu.Unlock()
+	if img, ok := regionMapBaseCache.items[key]; ok {
+		return img
+	}
+	return nil
+}
+
+func storeBaseMapCached(key baseMapKey, img *image.RGBA) {
+	regionMapBaseCache.mu.Lock()
+	defer regionMapBaseCache.mu.Unlock()
+	if len(regionMapBaseCache.items) >= regionMapBaseCacheMax {
+		regionMapBaseCache.items = make(map[baseMapKey]*image.RGBA)
+	}
+	regionMapBaseCache.items[key] = img
+}
+
+func toRGBA(src image.Image) *image.RGBA {
+	b := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
+	return dst
+}
+
+func cloneRGBA(src *image.RGBA) *image.RGBA {
+	if src == nil {
+		return nil
+	}
+	dst := image.NewRGBA(src.Bounds())
+	copy(dst.Pix, src.Pix)
+	return dst
 }
 
 type tileKey struct {
@@ -631,10 +792,21 @@ type RegionMapGenerator struct {
 	rr        int
 }
 
+var regionMapGenerator = newRegionMapGenerator()
+
 func newRegionMapGenerator() *RegionMapGenerator {
+	transport := &http.Transport{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32,
+		MaxConnsPerHost:       32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &RegionMapGenerator{
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   12 * time.Second,
+			Transport: transport,
 		},
 		userAgent: regionMapUserAgent,
 		cache:     make(map[string]image.Image),
@@ -645,7 +817,7 @@ func (g *RegionMapGenerator) fetchTiles(minTX, maxTX, minTY, maxTY, zoom int) ma
 	result := make(map[tileKey]image.Image)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
+	sem := make(chan struct{}, regionMapMaxConcurrent)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 
