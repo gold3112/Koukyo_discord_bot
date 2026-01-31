@@ -196,69 +196,9 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		if err := respondDeferred(s, i); err != nil {
 			return err
 		}
-		parts := strings.Split(fullsize, "-")
-		var (
-			tileX  int
-			tileY  int
-			pixelX int
-			pixelY int
-			width  int
-			height int
-		)
-		switch len(parts) {
-		case 6:
-			var err error
-			tileX, err = strconv.Atoi(parts[0])
-			if err != nil {
-				return followupMessage(s, i, fmt.Sprintf("❌ 座標値が不正です: %s", fullsize))
-			}
-			tileY, err = strconv.Atoi(parts[1])
-			if err != nil {
-				return followupMessage(s, i, fmt.Sprintf("❌ 座標値が不正です: %s", fullsize))
-			}
-			pixelX, err = strconv.Atoi(parts[2])
-			if err != nil {
-				return followupMessage(s, i, fmt.Sprintf("❌ 座標値が不正です: %s", fullsize))
-			}
-			pixelY, err = strconv.Atoi(parts[3])
-			if err != nil {
-				return followupMessage(s, i, fmt.Sprintf("❌ 座標値が不正です: %s", fullsize))
-			}
-			width, err = strconv.Atoi(parts[4])
-			if err != nil {
-				return followupMessage(s, i, fmt.Sprintf("❌ サイズが不正です: %s", fullsize))
-			}
-			height, err = strconv.Atoi(parts[5])
-			if err != nil {
-				return followupMessage(s, i, fmt.Sprintf("❌ サイズが不正です: %s", fullsize))
-			}
-		case 8:
-			values := make([]int, 0, 8)
-			for _, part := range parts {
-				val, err := strconv.Atoi(part)
-				if err != nil {
-					return followupMessage(s, i, fmt.Sprintf("❌ 座標値が不正です: %s", fullsize))
-				}
-				values = append(values, val)
-			}
-			absX1 := values[0]*utils.WplaceTileSize + values[2]
-			absY1 := values[1]*utils.WplaceTileSize + values[3]
-			absX2 := values[4]*utils.WplaceTileSize + values[6]
-			absY2 := values[5]*utils.WplaceTileSize + values[7]
-			if absX1 > absX2 {
-				absX1, absX2 = absX2, absX1
-			}
-			if absY1 > absY2 {
-				absY1, absY2 = absY2, absY1
-			}
-			tileX = absX1 / utils.WplaceTileSize
-			tileY = absY1 / utils.WplaceTileSize
-			pixelX = absX1 % utils.WplaceTileSize
-			pixelY = absY1 % utils.WplaceTileSize
-			width = absX2 - absX1
-			height = absY2 - absY1
-		default:
-			return followupMessage(s, i, fmt.Sprintf("❌ fullsize形式が正しくありません: %s", fullsize))
+		tileX, tileY, pixelX, pixelY, width, height, err := parseFullsizeString(fullsize)
+		if err != nil {
+			return followupMessage(s, i, "❌ "+err.Error())
 		}
 
 		if tileX < 0 || tileX >= utils.WplaceTilesPerEdge || tileY < 0 || tileY >= utils.WplaceTilesPerEdge {

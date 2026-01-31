@@ -35,3 +35,4 @@ data/vandalized_pixels.json
 data/
 !data/easter_eggs.json
 !data/.gitkeep
+!data/get_shortcuts.json
