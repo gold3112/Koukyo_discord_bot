@@ -564,3 +564,19 @@ func (n *Notifier) NotifyNewUser(kind string, user activity.UserActivity) {
 		}
 	}
 }
+
+// NotifyAchievement sends an achievement notification to the configured channel.
+func (n *Notifier) NotifyAchievement(guildID, userDisplay, achievementName string) {
+	if n == nil || n.session == nil || n.settings == nil {
+		return
+	}
+	settings := n.settings.GetGuildSettings(guildID)
+	if settings.AchievementChannel == nil {
+		return
+	}
+	channelID := *settings.AchievementChannel
+	content := fmt.Sprintf("🏅 %s が実績: **%s** を獲得しました！", userDisplay, achievementName)
+	if _, err := n.session.ChannelMessageSend(channelID, content); err != nil {
+		log.Printf("Failed to send achievement notification to channel %s: %v", channelID, err)
+	}
+}

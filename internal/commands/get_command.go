@@ -77,7 +77,7 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		if err != nil {
 			return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 		}
-		latLng := utils.TilePixelToLngLat(tileX, tileY, utils.WplaceTileSize/2, utils.WplaceTileSize/2)
+		latLng := utils.TilePixelCenterToLngLat(tileX, tileY, utils.WplaceTileSize/2, utils.WplaceTileSize/2)
 		wplaceURL := utils.BuildWplaceURL(latLng.Lng, latLng.Lat, calculateZoomFromWH(utils.WplaceTileSize, utils.WplaceTileSize))
 		filename := fmt.Sprintf("tile_%d-%d.png", tileX, tileY)
 		embed := &discordgo.MessageEmbed{
@@ -250,7 +250,7 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		centerTileY := int(centerAbsY) / utils.WplaceTileSize
 		centerPixelX := int(centerAbsX) % utils.WplaceTileSize
 		centerPixelY := int(centerAbsY) % utils.WplaceTileSize
-		centerLatLng := utils.TilePixelToLngLat(centerTileX, centerTileY, centerPixelX, centerPixelY)
+		centerLatLng := utils.TilePixelCenterToLngLat(centerTileX, centerTileY, centerPixelX, centerPixelY)
 		wplaceURL := utils.BuildWplaceURL(centerLatLng.Lng, centerLatLng.Lat, calculateZoomFromWH(width, height))
 
 		filename := fmt.Sprintf("fullsize_%d-%d-%d-%d_%dx%d.png", tileX, tileY, pixelX, pixelY, width, height)

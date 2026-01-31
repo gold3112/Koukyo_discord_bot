@@ -138,7 +138,7 @@ func (c *GetCommand) ExecuteFullsizeText(s *discordgo.Session, m *discordgo.Mess
 	centerTileY := int(centerAbsY) / utils.WplaceTileSize
 	centerPixelX := int(centerAbsX) % utils.WplaceTileSize
 	centerPixelY := int(centerAbsY) % utils.WplaceTileSize
-	centerLatLng := utils.TilePixelToLngLat(centerTileX, centerTileY, centerPixelX, centerPixelY)
+	centerLatLng := utils.TilePixelCenterToLngLat(centerTileX, centerTileY, centerPixelX, centerPixelY)
 	wplaceURL := utils.BuildWplaceURL(centerLatLng.Lng, centerLatLng.Lat, calculateZoomFromWH(width, height))
 
 	filename := fmt.Sprintf("fullsize_%d-%d-%d-%d_%dx%d.png", tileX, tileY, pixelX, pixelY, width, height)

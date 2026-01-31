@@ -13,6 +13,7 @@ type GuildSettings struct {
 	NotificationChannel       *string `json:"notification_channel,omitempty"`        // 通知チャンネルID
 	NotificationVandalChannel *string `json:"notification_vandal_channel,omitempty"` // 荒らしユーザー通知チャンネル
 	NotificationFixChannel    *string `json:"notification_fix_channel,omitempty"`    // 修復ユーザー通知チャンネル
+	AchievementChannel        *string `json:"achievement_channel,omitempty"`         // 実績通知チャンネル
 	AutoNotifyEnabled         bool    `json:"auto_notify_enabled"`                   // 自動通知ON/OFF
 	NotificationThreshold     float64 `json:"notification_threshold"`                // 通知閾値（%）
 	MentionRole               *string `json:"mention_role,omitempty"`                // メンションロールID

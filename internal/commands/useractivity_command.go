@@ -307,6 +307,9 @@ func buildUserActivityDetailEmbed(dataDir, kind, listType string, page int) (*di
 		if entries[i].Score == entries[j].Score {
 			return entries[i].Name < entries[j].Name
 		}
+		if kind == userListKindGrf {
+			return entries[i].Score < entries[j].Score
+		}
 		return entries[i].Score > entries[j].Score
 	})
 	if page < 0 {
@@ -365,21 +368,7 @@ func buildUserActivityDetailEmbedFromEntry(kind, listType string, entry userActi
 	if kind == userListKindFix {
 		title = "🛠️ 修復ユーザー詳細"
 	}
-	score := entry.Score
-	if listType == "" {
-		listType = userListTypeScore
-	}
-	if listType == userListTypeAbsolute {
-		if kind == userListKindFix {
-			score = entry.RestoredCount
-		} else {
-			score = entry.VandalCount
-		}
-	} else if kind == userListKindFix {
-		score = entry.RestoredCount - entry.VandalCount
-	} else {
-		score = entry.VandalCount - entry.RestoredCount
-	}
+	score := activityScore(entry.RestoredCount, entry.VandalCount)
 	embed := &discordgo.MessageEmbed{
 		Title: title,
 		Color: 0x3498DB,
@@ -419,21 +408,11 @@ func loadUserActivityEntries(dataDir, kind, listType string) ([]userActivityEntr
 
 	entries := make([]userActivityEntry, 0, len(raw))
 	for id, entry := range raw {
-		score := 0
-		if listType == userListTypeAbsolute {
-			if kind == userListKindFix {
-				score = entry.RestoredCount
-			} else {
-				score = entry.VandalCount
-			}
-		} else {
-			if kind == userListKindFix {
-				score = entry.RestoredCount - entry.VandalCount
-			} else {
-				score = entry.VandalCount - entry.RestoredCount
-			}
+		score := activityScore(entry.RestoredCount, entry.VandalCount)
+		if kind == userListKindFix && score <= 0 {
+			continue
 		}
-		if score <= 0 {
+		if kind == userListKindGrf && score >= 0 {
 			continue
 		}
 		lastSeen := parseUserListTime(entry.LastSeen)
@@ -484,7 +463,7 @@ func loadUserActivityByDiscordName(dataDir, query string) ([]userActivityEntry, 
 			Picture:       entry.Picture,
 			VandalCount:   entry.VandalCount,
 			RestoredCount: entry.RestoredCount,
-			Score:         entry.VandalCount - entry.RestoredCount,
+			Score:         activityScore(entry.RestoredCount, entry.VandalCount),
 			LastSeen:      parseUserListTime(entry.LastSeen),
 		})
 	}
@@ -520,7 +499,7 @@ func loadUserActivityByID(dataDir, userID, discordID string) (userActivityEntry,
 				Picture:       entry.Picture,
 				VandalCount:   entry.VandalCount,
 				RestoredCount: entry.RestoredCount,
-				Score:         entry.VandalCount - entry.RestoredCount,
+				Score:         activityScore(entry.RestoredCount, entry.VandalCount),
 				LastSeen:      parseUserListTime(entry.LastSeen),
 			}, nil
 		}
@@ -534,7 +513,7 @@ func loadUserActivityByID(dataDir, userID, discordID string) (userActivityEntry,
 				Picture:       entry.Picture,
 				VandalCount:   entry.VandalCount,
 				RestoredCount: entry.RestoredCount,
-				Score:         entry.VandalCount - entry.RestoredCount,
+				Score:         activityScore(entry.RestoredCount, entry.VandalCount),
 				LastSeen:      parseUserListTime(entry.LastSeen),
 			}, nil
 		}

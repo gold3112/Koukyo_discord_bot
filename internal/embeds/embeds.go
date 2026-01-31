@@ -146,7 +146,7 @@ func BuildConvertLngLatEmbed(lng, lat float64) *discordgo.MessageEmbed {
 
 // BuildConvertPixelEmbed ピクセル座標 → 経度緯度変換結果の埋め込みを作成
 func BuildConvertPixelEmbed(tileX, tileY, pixelX, pixelY int) *discordgo.MessageEmbed {
-	lngLat := utils.TilePixelToLngLat(tileX, tileY, pixelX, pixelY)
+	lngLat := utils.TilePixelCenterToLngLat(tileX, tileY, pixelX, pixelY)
 	url := utils.BuildWplaceURL(lngLat.Lng, lngLat.Lat, 14.76)
 	coord := &utils.Coordinate{TileX: tileX, TileY: tileY, PixelX: pixelX, PixelY: pixelY}
 	hyphenCoords := utils.FormatHyphenCoords(coord)
@@ -455,6 +455,10 @@ func BuildSettingsEmbed(settings *config.SettingsManager, guildID string) *disco
 	if guildSettings.MentionRole != nil {
 		roleText = fmt.Sprintf("<@&%s>", *guildSettings.MentionRole)
 	}
+	achievementChannelText := "(未設定)"
+	if guildSettings.AchievementChannel != nil {
+		achievementChannelText = fmt.Sprintf("<#%s>", *guildSettings.AchievementChannel)
+	}
 
 	embed := &discordgo.MessageEmbed{
 		Title:       "⚙️ Bot設定パネル",
@@ -489,6 +493,11 @@ func BuildSettingsEmbed(settings *config.SettingsManager, guildID string) *disco
 			{
 				Name:   "メンションロール",
 				Value:  roleText,
+				Inline: true,
+			},
+			{
+				Name:   "実績通知チャンネル",
+				Value:  achievementChannelText,
 				Inline: true,
 			},
 		},

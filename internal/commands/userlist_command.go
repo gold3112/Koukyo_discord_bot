@@ -190,6 +190,7 @@ type userListEntry struct {
 	ID       string
 	Name     string
 	Alliance string
+	Score    int
 	Count    int
 	LastSeen time.Time
 }
@@ -205,10 +206,16 @@ func buildUserListEmbed(dataDir, kind, mode, listType string, page int) (*discor
 		})
 	} else {
 		sort.Slice(entries, func(i, j int) bool {
-			if entries[i].Count == entries[j].Count {
+			if kind == userListKindGrf {
+				if entries[i].Score == entries[j].Score {
+					return entries[i].Name < entries[j].Name
+				}
+				return entries[i].Score < entries[j].Score
+			}
+			if entries[i].Score == entries[j].Score {
 				return entries[i].Name < entries[j].Name
 			}
-			return entries[i].Count > entries[j].Count
+			return entries[i].Score > entries[j].Score
 		})
 	}
 
@@ -321,20 +328,22 @@ func loadUserListEntries(dataDir, kind, listType string) ([]userListEntry, error
 
 	entries := make([]userListEntry, 0, len(raw))
 	for id, entry := range raw {
-		count := 0
+		score := activityScore(entry.RestoredCount, entry.VandalCount)
+		if kind == userListKindFix && score <= 0 {
+			continue
+		}
+		if kind == userListKindGrf && score >= 0 {
+			continue
+		}
+		count := score
 		if listType == userListTypeAbsolute {
-			count = entry.VandalCount
 			if kind == userListKindFix {
 				count = entry.RestoredCount
-			}
-		} else {
-			if kind == userListKindFix {
-				count = entry.RestoredCount - entry.VandalCount
 			} else {
-				count = entry.VandalCount - entry.RestoredCount
+				count = entry.VandalCount
 			}
 		}
-		if count <= 0 {
+		if count == 0 {
 			continue
 		}
 		lastSeen := parseUserListTime(entry.LastSeen)
@@ -342,6 +351,7 @@ func loadUserListEntries(dataDir, kind, listType string) ([]userListEntry, error
 			ID:       id,
 			Name:     entry.Name,
 			Alliance: entry.AllianceName,
+			Score:    score,
 			Count:    count,
 			LastSeen: lastSeen,
 		})

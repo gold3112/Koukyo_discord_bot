@@ -527,7 +527,7 @@ func buildRegionDetailImage(reg Region, limiter *utils.RateLimiter) (*discordgo.
 	centerLng := reg.CenterLatLng[1]
 	imageWidth := gridCols * utils.WplaceTileSize
 	imageHeight := gridRows * utils.WplaceTileSize
-	wplaceURL := utils.BuildWplaceURL(centerLng, centerLat, calculateZoomFromWH(imageWidth, imageHeight))
+		wplaceURL := utils.BuildWplaceURL(centerLng, centerLat, calculateZoomFromWH(imageWidth, imageHeight))
 
 	embed := &discordgo.MessageEmbed{
 		Title: fmt.Sprintf("🗺️ %s 全域画像", displayName),

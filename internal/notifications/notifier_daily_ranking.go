@@ -212,7 +212,7 @@ func formatRanking(entries []rankingEntry) string {
 		if entry.Alliance != "" {
 			display = fmt.Sprintf("%s (%s)", display, entry.Alliance)
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s - %d", i+1, display, entry.Count))
+		lines = append(lines, fmt.Sprintf("%d. %s | %d", i+1, display, entry.Count))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -332,11 +332,7 @@ func formatActivityRanking(entries []rankingEntry) string {
 		if entry.Alliance != "" {
 			display = fmt.Sprintf("%s (%s)", display, entry.Alliance)
 		}
-		countText := fmt.Sprintf("%d", entry.Count)
-		if entry.Count > 0 {
-			countText = fmt.Sprintf("+%d", entry.Count)
-		}
-		lines = append(lines, fmt.Sprintf("%d. %s - %s", i+1, display, countText))
+		lines = append(lines, fmt.Sprintf("%d. %s | %d", i+1, display, entry.Count))
 	}
 	return strings.Join(lines, "\n")
 }
