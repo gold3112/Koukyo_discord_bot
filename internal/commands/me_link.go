@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,9 +21,9 @@ import (
 const (
 	meLinkTileX      = 1755
 	meLinkTileY      = 55
-	meLinkPixelXBase = 0
-	meLinkPixelYBase = 0
-	meLinkPixelSlots = 10
+	meLinkPixelMargin = 2
+	meLinkMaxSessions = 20
+	meLinkPickAttempts = 50
 	meLinkTimeout    = 1 * time.Minute
 	meLinkPollEvery  = 10 * time.Second
 	meLinkZoom       = 21.17
@@ -34,6 +35,7 @@ type meLinkSession struct {
 	pixelY    int
 	initialID int
 	startedAt time.Time
+	notify   func(string)
 }
 
 type meLinkManager struct {
@@ -47,6 +49,8 @@ var globalMeLinkManager = &meLinkManager{
 	inUsePos: make(map[string]string),
 }
 
+var meLinkRng = rand.New(rand.NewSource(time.Now().UnixNano()))
+
 func (m *meLinkManager) acquire(userID string) (*meLinkSession, time.Duration, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -59,10 +63,23 @@ func (m *meLinkManager) acquire(userID string) (*meLinkSession, time.Duration, b
 		return existing, remaining, false
 	}
 
+	if len(m.byUser) >= meLinkMaxSessions {
+		return nil, 0, false
+	}
+
 	now := time.Now()
-	for i := 0; i < meLinkPixelSlots; i++ {
-		px := meLinkPixelXBase
-		py := meLinkPixelYBase + i
+	minPix := meLinkPixelMargin
+	maxPix := utils.WplaceTileSize - 1 - meLinkPixelMargin
+	if minPix < 0 {
+		minPix = 0
+	}
+	if maxPix < minPix {
+		maxPix = minPix
+	}
+
+	for i := 0; i < meLinkPickAttempts; i++ {
+		px := minPix + meLinkRng.Intn(maxPix-minPix+1)
+		py := minPix + meLinkRng.Intn(maxPix-minPix+1)
 		key := pixelKeyForLink(px, py)
 		if _, used := m.inUsePos[key]; used {
 			continue
@@ -99,6 +116,9 @@ func (c *MeCommand) startLinkFlow(
 ) error {
 	session, remaining, created := globalMeLinkManager.acquire(user.ID)
 	if !created {
+		if session == nil {
+			return sendFallback("⏳ 連携が混雑しています。少し時間をおいて再試行してください。")
+		}
 		return sendFallback(fmt.Sprintf("⏳ 既に紐づけ処理中です。残り時間: %s\n座標: (%d, %d) (タイル %d-%d)",
 			remaining.Round(time.Second), session.pixelX, session.pixelY, meLinkTileX, meLinkTileY))
 	}
@@ -114,20 +134,25 @@ func (c *MeCommand) startLinkFlow(
 		session.initialID = resp.PaintedBy.ID
 	}
 
-	latLng := utils.TilePixelToLngLat(meLinkTileX, meLinkTileY, session.pixelX, session.pixelY)
+	latLng := utils.TilePixelCenterToLngLat(meLinkTileX, meLinkTileY, session.pixelX, session.pixelY)
 	url := utils.BuildWplaceURL(latLng.Lng, latLng.Lat, meLinkZoom)
 	instruction := strings.TrimSpace(fmt.Sprintf(
 		"✅ Wplace連携の確認を開始します。\n"+
 			"1分以内にこのURLを開き、指定ピクセルに色を置いてください。\n"+
+			"※ 既に塗ったことがある場合は「別の色で塗り直し」してください。\n"+
 			"URL: %s\n"+
 			"タイル: %d-%d / ピクセル: (%d, %d)",
 		url, meLinkTileX, meLinkTileY, session.pixelX, session.pixelY,
 	))
 
+	session.notify = func(msg string) {
+		_ = sendFallback(msg)
+	}
+
 	if err := sendDM(s, user.ID, instruction); err != nil {
-		_ = sendFallback(instruction)
+		_ = sendFallback("⚠️ DMに送信できませんでした。以下のURLを使用してください。\n" + instruction)
 	} else {
-		_ = sendFallback("📩 DMに認証用URLを送信しました。")
+		_ = sendFallback("📩 DMに認証用URLを送信しました。進捗はこのチャンネルにも通知します。")
 	}
 
 	go c.pollLinkResult(s, user, session)
@@ -146,7 +171,11 @@ func (c *MeCommand) pollLinkResult(s *discordgo.Session, user *discordgo.User, s
 	for {
 		select {
 		case <-ctx.Done():
-			_ = sendDM(s, user.ID, "⏱️ 認証時間が経過しました。/me を再実行してください。")
+			timeoutMsg := "⏱️ 認証時間が経過しました。/me を再実行してください。"
+			_ = sendDM(s, user.ID, timeoutMsg)
+			if session.notify != nil {
+				session.notify(timeoutMsg)
+			}
 			return
 		case <-ticker.C:
 			checkCtx, cancelCheck := context.WithTimeout(context.Background(), 8*time.Second)
@@ -166,11 +195,18 @@ func (c *MeCommand) pollLinkResult(s *discordgo.Session, user *discordgo.User, s
 			}
 			entry, err := updateUserActivityLink(c.dataDir, resp.PaintedBy, user)
 			if err != nil {
-				_ = sendDM(s, user.ID, fmt.Sprintf("❌ 紐づけに失敗しました: %v", err))
+				errMsg := fmt.Sprintf("❌ 紐づけに失敗しました: %v", err)
+				_ = sendDM(s, user.ID, errMsg)
+				if session.notify != nil {
+					session.notify(errMsg)
+				}
 				return
 			}
 			embed, file := buildMeCardEmbed(entry, user)
 			_ = sendDMEmbed(s, user.ID, embed, file)
+			if session.notify != nil {
+				session.notify("✅ 連携が完了しました。DMにユーザーカードを送信しました。")
+			}
 			return
 		}
 	}

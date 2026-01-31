@@ -72,6 +72,25 @@ func TilePixelToLngLat(tileX, tileY, pixelX, pixelY int) *LngLat {
 	}
 }
 
+// TilePixelToLngLatFloat float版（ピクセル中心などで利用）
+func TilePixelToLngLatFloat(tileX, tileY int, pixelX, pixelY float64) *LngLat {
+	n := float64(WplaceTilesPerEdge)
+	xFloat := float64(tileX) + pixelX/float64(WplaceTileSize)
+	yFloat := float64(tileY) + pixelY/float64(WplaceTileSize)
+	lng := xFloat/n*360 - 180
+	latRad := math.Atan(math.Sinh(math.Pi * (1 - 2*yFloat/n)))
+	lat := latRad * 180 / math.Pi
+	return &LngLat{
+		Lng: lng,
+		Lat: lat,
+	}
+}
+
+// TilePixelCenterToLngLat ピクセル中心を指す経度緯度を返す
+func TilePixelCenterToLngLat(tileX, tileY, pixelX, pixelY int) *LngLat {
+	return TilePixelToLngLatFloat(tileX, tileY, float64(pixelX)+0.5, float64(pixelY)+0.5)
+}
+
 // BuildWplaceURL Wplace.liveのURLを生成
 func BuildWplaceURL(lng, lat, zoom float64) string {
 	return fmt.Sprintf("https://wplace.live/?lat=%.6f&lng=%.6f&zoom=%.2f",

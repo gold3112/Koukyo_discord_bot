@@ -10,13 +10,16 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"container/list"
 	"sync"
 	"time"
 )
 
 const (
-	getTileCacheTTL      = 2 * time.Minute
-	getTileMaxConcurrent = 16
+	getTileCacheTTL         = 2 * time.Minute
+	getTileMaxConcurrent    = 16
+	getTileCacheMaxEntries  = 512
+	getTileDecodeConcurrent = 8
 )
 
 var tileHTTPClient = &http.Client{
@@ -34,15 +37,18 @@ var tileHTTPClient = &http.Client{
 type tileCacheEntry struct {
 	data      []byte
 	expiresAt time.Time
+	element   *list.Element
 }
 
 var tileCache struct {
 	mu    sync.Mutex
-	items map[string]tileCacheEntry
+	items map[string]*tileCacheEntry
+	order *list.List
 }
 
 func init() {
-	tileCache.items = make(map[string]tileCacheEntry)
+	tileCache.items = make(map[string]*tileCacheEntry)
+	tileCache.order = list.New()
 }
 
 // downloadTile 単一のタイル画像をダウンロードするヘルパー関数
@@ -89,8 +95,11 @@ func getTileFromCache(key string) ([]byte, bool) {
 		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
-		delete(tileCache.items, key)
+		removeTileCacheEntryLocked(key, entry)
 		return nil, false
+	}
+	if entry.element != nil {
+		tileCache.order.MoveToFront(entry.element)
 	}
 	return entry.data, true
 }
@@ -98,9 +107,45 @@ func getTileFromCache(key string) ([]byte, bool) {
 func storeTileCache(key string, data []byte) {
 	tileCache.mu.Lock()
 	defer tileCache.mu.Unlock()
-	tileCache.items[key] = tileCacheEntry{
+
+	if existing, ok := tileCache.items[key]; ok {
+		existing.data = data
+		existing.expiresAt = time.Now().Add(getTileCacheTTL)
+		if existing.element != nil {
+			tileCache.order.MoveToFront(existing.element)
+		}
+		return
+	}
+
+	entry := &tileCacheEntry{
 		data:      data,
 		expiresAt: time.Now().Add(getTileCacheTTL),
+	}
+	entry.element = tileCache.order.PushFront(key)
+	tileCache.items[key] = entry
+
+	for tileCache.order.Len() > getTileCacheMaxEntries {
+		back := tileCache.order.Back()
+		if back == nil {
+			break
+		}
+		backKey, ok := back.Value.(string)
+		if !ok {
+			tileCache.order.Remove(back)
+			continue
+		}
+		if victim, ok := tileCache.items[backKey]; ok {
+			removeTileCacheEntryLocked(backKey, victim)
+		} else {
+			tileCache.order.Remove(back)
+		}
+	}
+}
+
+func removeTileCacheEntryLocked(key string, entry *tileCacheEntry) {
+	delete(tileCache.items, key)
+	if entry.element != nil {
+		tileCache.order.Remove(entry.element)
 	}
 }
 
@@ -183,17 +228,39 @@ func combineTilesImage(tilesData [][]byte, tileWidth, tileHeight, gridCols, grid
 	combinedHeight := tileHeight * gridRows
 	combinedImg := image.NewRGBA(image.Rect(0, 0, combinedWidth, combinedHeight))
 
+	var drawMu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, getTileDecodeConcurrent)
+	var firstErr error
+	var errMu sync.Mutex
+
 	for i, data := range tilesData {
-		tileImg, err := png.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", i, err)
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(index int, payload []byte) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			tileImg, err := png.Decode(bytes.NewReader(payload))
+			if err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", index, err)
+				}
+				errMu.Unlock()
+				return
+			}
 
-		col := i % gridCols
-		row := i / gridCols
-
-		dp := image.Pt(col*tileWidth, row*tileHeight)
-		draw.Draw(combinedImg, tileImg.Bounds().Add(dp), tileImg, image.Point{}, draw.Src)
+			col := index % gridCols
+			row := index / gridCols
+			dp := image.Pt(col*tileWidth, row*tileHeight)
+			drawMu.Lock()
+			draw.Draw(combinedImg, tileImg.Bounds().Add(dp), tileImg, image.Point{}, draw.Src)
+			drawMu.Unlock()
+		}(i, data)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
 	}
 
 	return combinedImg, nil
@@ -214,6 +281,12 @@ func combineTilesCropped(tilesData [][]byte, tileWidth, tileHeight, gridCols, gr
 
 	out := image.NewRGBA(image.Rect(0, 0, cropRect.Dx(), cropRect.Dy()))
 
+	var drawMu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, getTileDecodeConcurrent)
+	var firstErr error
+	var errMu sync.Mutex
+
 	for i, data := range tilesData {
 		col := i % gridCols
 		row := i / gridCols
@@ -223,19 +296,36 @@ func combineTilesCropped(tilesData [][]byte, tileWidth, tileHeight, gridCols, gr
 			continue
 		}
 
-		tileImg, err := png.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", i, err)
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(index int, payload []byte, tileR, interR image.Rectangle) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			tileImg, err := png.Decode(bytes.NewReader(payload))
+			if err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", index, err)
+				}
+				errMu.Unlock()
+				return
+			}
 
-		dstRect := image.Rect(
-			inter.Min.X-cropRect.Min.X,
-			inter.Min.Y-cropRect.Min.Y,
-			inter.Max.X-cropRect.Min.X,
-			inter.Max.Y-cropRect.Min.Y,
-		)
-		srcPt := image.Pt(inter.Min.X-tileRect.Min.X, inter.Min.Y-tileRect.Min.Y)
-		draw.Draw(out, dstRect, tileImg, srcPt, draw.Src)
+			dstRect := image.Rect(
+				interR.Min.X-cropRect.Min.X,
+				interR.Min.Y-cropRect.Min.Y,
+				interR.Max.X-cropRect.Min.X,
+				interR.Max.Y-cropRect.Min.Y,
+			)
+			srcPt := image.Pt(interR.Min.X-tileR.Min.X, interR.Min.Y-tileR.Min.Y)
+			drawMu.Lock()
+			draw.Draw(out, dstRect, tileImg, srcPt, draw.Src)
+			drawMu.Unlock()
+		}(i, data, tileRect, inter)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
 	}
 
 	return out, nil

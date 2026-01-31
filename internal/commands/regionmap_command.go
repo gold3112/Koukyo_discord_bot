@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"container/list"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -47,6 +48,8 @@ const (
 	regionMapMaxConcurrent   = 32
 	regionMapBaseCacheMax    = 8
 	regionMapOverlayCacheMax = 8
+	regionMapImageCacheMax   = 16
+	regionMapImageCacheTTL   = 5 * time.Minute
 
 	regionMapSelectPrefix  = "regionmap_select:"
 	regionMapPagePrefix    = "regionmap_page:"
@@ -96,6 +99,34 @@ type overlayCache struct {
 
 var regionMapOverlayCache = overlayCache{
 	items: make(map[overlayKey]*image.NRGBA),
+}
+
+type regionMapImageKey struct {
+	city      string
+	highlight string
+	minRX     int
+	maxRX     int
+	minRY     int
+	maxRY     int
+}
+
+type regionMapImageEntry struct {
+	data      []byte
+	mime      string
+	filename  string
+	expiresAt time.Time
+	element   *list.Element
+}
+
+type regionMapImageCache struct {
+	mu    sync.Mutex
+	items map[regionMapImageKey]*regionMapImageEntry
+	order *list.List
+}
+
+var regionMapImageCacheStore = regionMapImageCache{
+	items: make(map[regionMapImageKey]*regionMapImageEntry),
+	order: list.New(),
 }
 
 func (c *RegionMapCommand) Name() string { return "regionmap" }
@@ -219,7 +250,7 @@ func buildRegionMapMessage(query string, page int, highlight string) (*discordgo
 	names := sortedRegionNames(regions)
 	page = clampPage(page, len(names), regionMapPageSize)
 
-	data, contentType, filename, err := generateRegionMapImage(query, regions, highlight)
+	data, contentType, filename, err := generateRegionMapImageCached(query, regions, highlight)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -629,6 +660,30 @@ func generateRegionMapImage(cityName string, regions map[string]Region, highligh
 	return generateSimplifiedRegionMap(cityName, regions, highlight)
 }
 
+func generateRegionMapImageCached(cityName string, regions map[string]Region, highlight string) ([]byte, string, string, error) {
+	minRX, maxRX, minRY, maxRY, ok := calculateRegionBounds(regions)
+	if !ok {
+		return nil, "", "", fmt.Errorf("Region座標が不正です")
+	}
+	key := regionMapImageKey{
+		city:      cityNameLower(cityName),
+		highlight: strings.ToLower(strings.TrimSpace(highlight)),
+		minRX:     minRX,
+		maxRX:     maxRX,
+		minRY:     minRY,
+		maxRY:     maxRY,
+	}
+	if data, mime, filename, ok := getRegionMapImageCache(key); ok {
+		return data, mime, filename, nil
+	}
+	data, contentType, filename, err := generateSimplifiedRegionMap(cityName, regions, highlight)
+	if err != nil {
+		return nil, "", "", err
+	}
+	storeRegionMapImageCache(key, data, contentType, filename)
+	return data, contentType, filename, nil
+}
+
 func generateFullRegionMap(cityName string, regions map[string]Region, highlight string, minTX, maxTX, minTY, maxTY int) ([]byte, error) {
 	tileWidth := maxTX - minTX + 1
 	tileHeight := maxTY - minTY + 1
@@ -1014,6 +1069,69 @@ func storeOverlayCached(key overlayKey, img *image.NRGBA) {
 		regionMapOverlayCache.items = make(map[overlayKey]*image.NRGBA)
 	}
 	regionMapOverlayCache.items[key] = img
+}
+
+func getRegionMapImageCache(key regionMapImageKey) ([]byte, string, string, bool) {
+	regionMapImageCacheStore.mu.Lock()
+	defer regionMapImageCacheStore.mu.Unlock()
+	entry, ok := regionMapImageCacheStore.items[key]
+	if !ok {
+		return nil, "", "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		removeRegionMapImageCacheEntryLocked(key, entry)
+		return nil, "", "", false
+	}
+	if entry.element != nil {
+		regionMapImageCacheStore.order.MoveToFront(entry.element)
+	}
+	return entry.data, entry.mime, entry.filename, true
+}
+
+func storeRegionMapImageCache(key regionMapImageKey, data []byte, mime, filename string) {
+	regionMapImageCacheStore.mu.Lock()
+	defer regionMapImageCacheStore.mu.Unlock()
+	if existing, ok := regionMapImageCacheStore.items[key]; ok {
+		existing.data = data
+		existing.mime = mime
+		existing.filename = filename
+		existing.expiresAt = time.Now().Add(regionMapImageCacheTTL)
+		if existing.element != nil {
+			regionMapImageCacheStore.order.MoveToFront(existing.element)
+		}
+		return
+	}
+	entry := &regionMapImageEntry{
+		data:      data,
+		mime:      mime,
+		filename:  filename,
+		expiresAt: time.Now().Add(regionMapImageCacheTTL),
+	}
+	entry.element = regionMapImageCacheStore.order.PushFront(key)
+	regionMapImageCacheStore.items[key] = entry
+	for regionMapImageCacheStore.order.Len() > regionMapImageCacheMax {
+		back := regionMapImageCacheStore.order.Back()
+		if back == nil {
+			break
+		}
+		backKey, ok := back.Value.(regionMapImageKey)
+		if !ok {
+			regionMapImageCacheStore.order.Remove(back)
+			continue
+		}
+		if victim, ok := regionMapImageCacheStore.items[backKey]; ok {
+			removeRegionMapImageCacheEntryLocked(backKey, victim)
+		} else {
+			regionMapImageCacheStore.order.Remove(back)
+		}
+	}
+}
+
+func removeRegionMapImageCacheEntryLocked(key regionMapImageKey, entry *regionMapImageEntry) {
+	delete(regionMapImageCacheStore.items, key)
+	if entry.element != nil {
+		regionMapImageCacheStore.order.Remove(entry.element)
+	}
 }
 
 func getBaseMapCached(key baseMapKey) *image.NRGBA {
