@@ -1,175 +1,82 @@
 # Koukyo Discord Bot (Go Edition)
 
-Wplace監視Discord Botの Go言語による再実装プロジェクト。
+Wplace 監視を行う Discord Bot の Go 実装です。WebSocket の差分監視・通知・ユーザー活動集計・画像生成をまとめて提供します。
 
-## 🎯 プロジェクト目標
+## 主な機能
 
-Python版 ([wplace-koukyo-bot](https://github.com/gold3112/wplace-koukyo-bot)) の機能を、
-よりシンプルで保守しやすいGoコードに移植し、モジュール設計を活かしたファイル管理を実現。
+- WebSocket での差分監視（差分率/加重差分率、画像データ）
+- 差分通知（Tier 制、0%復帰/完了通知、ロールメンション対応）
+- サーバー別設定パネル（`/settings`）
+- ユーザー活動の追跡/可視化（荒らし/修復のスコア・履歴）
+- 画像生成（/now の結合画像、グラフ/ヒートマップ/タイムラプス）
+- 地図/タイル取得ユーティリティ（`/get`、`/regionmap`）
+- 外部 API 向けのレートリミッター
 
-## 📁 プロジェクト構造
+## コマンド一覧
 
-```
-Koukyo_discord_bot/
-├── cmd/
-│   └── bot/
-│       └── main.go              # エントリーポイント
-├── internal/
-│   ├── commands/                # コマンド実装
-│   │   ├── command.go           # コマンドインターフェース & レジストリ
-│   │   ├── ping.go              # pingコマンド
-│   │   ├── help.go              # helpコマンド
-│   │   ├── info.go              # infoコマンド
-│   │   ├── now.go               # nowコマンド
-│   │   ├── time.go              # timeコマンド
-│   │   ├── convert.go           # convertコマンド
-│   │   ├── graph.go             # 差分率グラフコマンド
-│   │   ├── timelapse.go         # タイムラプスコマンド
-│   │   └── heatmap.go           # ヒートマップコマンド
-│   ├── config/
-│   │   └── config.go            # 設定管理
-│   ├── embeds/
-│   │   ├── embeds.go            # Discord埋め込み生成
-│   │   ├── graphs.go            # グラフ画像生成
-│   │   ├── timelapse.go         # タイムラプスGIF生成
-│   │   └── heatmap.go           # ヒートマップPNG生成
-│   ├── handler/
-│   │   └── handler.go           # イベントハンドラー
-│   ├── models/
-│   │   └── bot_info.go          # データモデル
-│   ├── monitor/
-│   │   └── state.go             # 監視状態管理
-│   ├── notifications/
-│   │   └── notifier.go          # 通知・自動投稿
-│   └── utils/
-│       ├── coordinator.go       # 座標変換ロジック
-│       ├── timezone.go          # タイムゾーン処理
-│       └── ratelimiter.go       # レートリミッター（queue制度）
-├── data/
-│   └── settings.json            # Bot設定
-├── docker-compose.yml           # Docker Compose設定
-├── Dockerfile                   # Dockerイメージ定義
-├── go.mod                       # Go モジュール定義
-└── go.sum                       # Go 依存関係チェックサム
-```
+テキストコマンドは `!` プレフィックス、スラッシュコマンドは `/` で利用できます（一部はスラッシュ専用）。
 
-## ✅ 実装済みコマンド
+### 監視・通知
+- `now` - 現在の監視状況を表示
+- `graph` - 差分率の時系列グラフ（期間指定可）
+- `timelapse` - 差分率 30%→0.2% のタイムラプス（GIF）
+- `heatmap` - 最近の変化量ヒートマップ
+- `settings` - 通知/閾値などの設定パネル（管理者向け）
+- `notification` - 荒らし/修復ユーザー通知チャンネル設定（管理者向け）
+- `status` - Bot 自体の稼働状況（メモリ、稼働時間など）
 
-### 基本コマンド
-- `!ping` / `/ping` - Bot疎通確認
-- `!help` / `/help` - コマンド一覧表示
+### ユーザー活動
+- `me` - 自分の活動カード表示（Wplace 連携フローあり）
+- `useractivity` - ユーザー活動の検索/詳細表示（スラッシュ専用）
+- `fixuser` - 修復ユーザー一覧（ランキング/最近、score/absolute）
+- `grfuser` - 荒らしユーザー一覧（ランキング/最近、score/absolute）
 
-### 情報表示
-- `!info` / `/info` - Botバージョン・稼働時間表示
-- `!now` / `/now` - 現在の監視状況表示（WebSocket連携✅）
-- `!time` / `/time` - 世界各地の現在時刻表示
+### 地図・取得系
+- `get` - タイル/Region/フルサイズ画像取得（スラッシュ専用）
+- `regionmap` - 地域の Region 配置マップ（スラッシュ専用）
+- `convert` - 座標変換（経度緯度 ⇄ ピクセル）
 
-### 座標変換
-- `!convert <lng> <lat>` / `/convert lng:<経度> lat:<緯度>`
-  - 経度緯度 → タイル座標 & ピクセル座標
-- `!convert <TlX-TlY-PxX-PxY>` / `/convert tlx:... tly:... pxx:... pxy:...`
-  - ピクセル座標 → 経度緯度
-- `/convert coords:<TlX-TlY-PxX-PxY>`
-  - ハイフン形式での座標変換
+### 便利コマンド
+- `help` - コマンド一覧
+- `info` - Bot 情報
+- `ping` - 疎通確認
+- `time` - 時刻表示/時差変換
+- `paint` - Paint 回復時間の計算（スラッシュ専用）
 
-### 可視化・分析系
-- `!graph [duration=1h|6h|24h|...]` / `/graph duration:1h` - 差分率の履歴グラフPNG生成（期間指定可）
-- `!timelapse` / `/timelapse` - 30%→0.2%のタイムラプスGIF生成
-- `!heatmap` / `/heatmap` - 変化量ヒートマップPNG生成
+※ `graph` / `timelapse` / `heatmap` は WebSocket 監視が有効なときのみ利用できます。
 
-#### グラフコマンド例
-```
-!graph duration=6h
-/graph duration:24h
+## 設定
+
+必須/任意の環境変数:
+
+- `DISCORD_TOKEN` (必須)
+- `WEBSOCKET_URL` (任意: 未指定の場合は監視機能が無効)
+- `POWER_SAVE_MODE` (任意: `1` で起動時に省電力モード)
+
+データは `data/` に保存されます（Docker 利用時は `/app/data`）。
+
+- `data/settings.json`
+- `data/user_activity.json`
+- `data/vandalized_pixels.json`
+- `data/vandal_daily.json`
+
+## 実行方法
+
+ローカル実行:
+```bash
+go run ./cmd/bot
 ```
 
-## 🌐 WebSocket監視機能
-
-- WebSocket URL: `wss://gold3112.online/ws`
-- リアルタイムでデータ受信・差分率計算
-- データ履歴: 最大20,000件保存
-
-### 省電力モード
-- 差分率が10分間0% → 省電力モード（画像・ヒートマップ更新停止、通知）
-- 15分間0% → 自動再起動（POWER_SAVE_MODE=1で再起動、Docker自動復帰）
-- 差分率が再び変動すると即解除
-
-### queue制度（レートリミッター）
-- 外部API/Webサイトへのリクエストは3RPS制限
-- ホストごとに独立したキューで安全に処理
-
-### 実装済み機能
-- WebSocket自動接続・再接続
-- バイナリデータのデコード
-- リアルタイム差分率の取得
-- スレッドセーフな状態管理
-- `/now` コマンドでのデータ表示
-- 差分率グラフPNG生成
-- タイムラプスGIF自動生成・投稿
-- ヒートマップPNG生成
-- 省電力モード・自動再起動
-- レートリミッター（queue制度）
-
-## 📝 移植状況
-
-### Phase 1: 基本コマンド実装 ✅ (100%)
-- [x] info - Bot情報表示
-- [x] now - 監視ステータス
-- [x] time - タイムゾーン表示
-- [x] convert - 座標変換
-- [x] ping - 疎通確認
-- [x] help - コマンド一覧
-
-### Phase 2: 監視・可視化機能 ✅ (100%)
-- [x] WebSocket接続
-- [x] リアルタイム差分検知
-- [x] データ受信・状態管理
-- [x] Discord Intents設定
-- [x] 画像表示（/now コマンド）
-- [x] 差分率グラフPNG生成
-- [x] タイムラプスGIF生成・自動投稿
-- [x] ヒートマップPNG生成
-- [x] 省電力モード・自動再起動
-- [x] レートリミッター（queue制度）
-
-### Phase 3: ユーザー追跡機能 📋 (0%)
-- [ ] grfusr - 荒らしユーザーリスト
-- [ ] fixusr - 修復者ユーザーリスト
-- [ ] leaderboard - ランキング表示
-
-### Phase 4: 高度な機能 📋 (0%)
-- [ ] 統計分析
-- [ ] 予測モデル (LSTM/Hawkes)
-- [ ] タイムラプス生成
-
-## 🔧 開発
-
-### レートリミッター利用例
-```go
-limiter := utils.NewRateLimiter(3) // 3RPS
-result, err := limiter.Do(ctx, "example.com", func() (interface{}, error) {
-    resp, err := http.Get("https://example.com/api")
-    return resp, err
-})
-```
-
-### ローカルビルド
+ビルド:
 ```bash
 go build -o bot.exe ./cmd/bot
 ```
 
-※ただしDockerの利用を推奨。
-
-### 依存関係の追加
+Docker:
 ```bash
-go get <package-name>
-go mod tidy
+docker compose up --build
 ```
-
-## 📜 ライセンス
-
-MIT License
 
 ## 移植元
 
-[wplace-koukyo-bot (Python)](https://github.com/gold3112/wplace-koukyo-bot)
+wplace-koukyo-bot (Python)

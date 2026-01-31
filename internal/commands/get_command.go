@@ -294,12 +294,11 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 			return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
 		}
 
-		combinedImg, err := combineTilesImage(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, tilesX, tilesY)
+		cropRect := image.Rect(startPixelX, startPixelY, startPixelX+width, startPixelY+height)
+		cropped, err := combineTilesCropped(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, tilesX, tilesY, cropRect)
 		if err != nil {
 			return followupMessage(s, i, fmt.Sprintf("❌ 画像結合に失敗しました: %v", err))
 		}
-		cropRect := image.Rect(startPixelX, startPixelY, startPixelX+width, startPixelY+height)
-		cropped := combinedImg.SubImage(cropRect)
 		buf := new(bytes.Buffer)
 		if err := png.Encode(buf, cropped); err != nil {
 			return followupMessage(s, i, fmt.Sprintf("❌ 画像エンコードに失敗しました: %v", err))

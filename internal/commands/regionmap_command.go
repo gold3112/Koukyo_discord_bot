@@ -549,6 +549,10 @@ func downloadRegionTile(ctx context.Context, limiter *utils.RateLimiter, tlx, tl
 	if limiter == nil {
 		return nil, fmt.Errorf("rate limiter is nil")
 	}
+	cacheKey := fmt.Sprintf("%d-%d", tlx, tly)
+	if data, ok := getTileFromCache(cacheKey); ok {
+		return data, nil
+	}
 	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tlx, tly)
 	val, err := limiter.Do(ctx, "backend.wplace.live", func() (interface{}, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -571,6 +575,9 @@ func downloadRegionTile(ctx context.Context, limiter *utils.RateLimiter, tlx, tl
 	data, ok := val.([]byte)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tlx, tly)
+	}
+	if len(data) > 0 {
+		storeTileCache(cacheKey, data)
 	}
 	return data, nil
 }

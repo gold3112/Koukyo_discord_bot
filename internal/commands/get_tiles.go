@@ -199,6 +199,48 @@ func combineTilesImage(tilesData [][]byte, tileWidth, tileHeight, gridCols, grid
 	return combinedImg, nil
 }
 
+// combineTilesCropped combines tiles but only renders a cropped region to reduce memory usage.
+// cropRect is relative to the combined image's coordinate system.
+func combineTilesCropped(tilesData [][]byte, tileWidth, tileHeight, gridCols, gridRows int, cropRect image.Rectangle) (*image.RGBA, error) {
+	if len(tilesData) == 0 {
+		return nil, fmt.Errorf("結合する画像データがありません")
+	}
+	if len(tilesData) != gridCols*gridRows {
+		return nil, fmt.Errorf("画像データの数 (%d) がグリッドサイズ (%d x %d) と一致しません", len(tilesData), gridCols, gridRows)
+	}
+	if cropRect.Dx() <= 0 || cropRect.Dy() <= 0 {
+		return nil, fmt.Errorf("クロップ範囲が不正です")
+	}
+
+	out := image.NewRGBA(image.Rect(0, 0, cropRect.Dx(), cropRect.Dy()))
+
+	for i, data := range tilesData {
+		col := i % gridCols
+		row := i / gridCols
+		tileRect := image.Rect(col*tileWidth, row*tileHeight, (col+1)*tileWidth, (row+1)*tileHeight)
+		inter := tileRect.Intersect(cropRect)
+		if inter.Dx() <= 0 || inter.Dy() <= 0 {
+			continue
+		}
+
+		tileImg, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", i, err)
+		}
+
+		dstRect := image.Rect(
+			inter.Min.X-cropRect.Min.X,
+			inter.Min.Y-cropRect.Min.Y,
+			inter.Max.X-cropRect.Min.X,
+			inter.Max.Y-cropRect.Min.Y,
+		)
+		srcPt := image.Pt(inter.Min.X-tileRect.Min.X, inter.Min.Y-tileRect.Min.Y)
+		draw.Draw(out, dstRect, tileImg, srcPt, draw.Src)
+	}
+
+	return out, nil
+}
+
 func calculateZoomFromWH(width, height int) float64 {
 	a := 21.16849365
 	bw := -0.45385241
