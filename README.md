@@ -2,6 +2,45 @@
 
 Wplace 監視を行う Discord Bot の Go 実装です。WebSocket の差分監視・通知・ユーザー活動集計・画像生成をまとめて提供します。
 
+## クイックスタート
+
+### 1) 環境変数（推奨: Docker env_file）
+
+リポジトリ外に secrets を置く想定例:
+
+```
+D:\Programing\VS_Code\go\secrets\koukyo_discord_bot.env
+```
+
+中身:
+
+```env
+DISCORD_TOKEN=your_discord_token_here
+WEBSOCKET_URL=wss://example.com/ws
+POWER_SAVE_MODE=0
+```
+
+`docker-compose.yml` からは以下のように参照します:
+
+```yaml
+services:
+  discord-bot:
+    env_file:
+      - ../secrets/koukyo_discord_bot.env
+```
+
+### 2) Docker 起動
+
+```bash
+docker compose up --build
+```
+
+### 3) ローカル起動
+
+```bash
+go run ./cmd/bot
+```
+
 ## 主な機能
 
 - WebSocket での差分監視（差分率/加重差分率、画像データ）
@@ -15,6 +54,7 @@ Wplace 監視を行う Discord Bot の Go 実装です。WebSocket の差分監�
 ## コマンド一覧
 
 テキストコマンドは `!` プレフィックス、スラッシュコマンドは `/` で利用できます（一部はスラッシュ専用）。
+起動時に自動でスラッシュコマンドを同期します。
 
 ### 監視・通知
 - `now` - 現在の監視状況を表示
@@ -59,6 +99,17 @@ Wplace 監視を行う Discord Bot の Go 実装です。WebSocket の差分監�
 - `data/user_activity.json`
 - `data/vandalized_pixels.json`
 - `data/vandal_daily.json`
+- `data/achievements.json`
+
+## Discord 側の設定
+
+Bot に以下の Intents を許可してください:
+
+- `Guilds`
+- `Guild Messages`
+- `Message Content`
+
+※ メッセージコマンドを使わない場合でも、`Message Content` が無効だと `!` コマンドは反応しません。
 
 ## 実行方法
 
@@ -76,6 +127,17 @@ Docker:
 ```bash
 docker compose up --build
 ```
+
+## トラブルシュート
+
+- スラッシュコマンドが出てこない  
+  -> Bot の再起動後に同期されます。権限不足や API エラーがある場合はログを確認してください。
+
+- 監視が動かない  
+  -> `WEBSOCKET_URL` の設定と接続先の到達性を確認してください。
+
+- 通知が来ない  
+  -> `/settings` で通知チャンネルを設定し、`auto_notify` が有効か確認してください。
 
 ## 移植元
 
