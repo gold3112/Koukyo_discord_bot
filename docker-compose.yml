@@ -2,7 +2,7 @@ services:
   discord-bot:
     build: .
     env_file:
-      - .env
+      - ../secrets/koukyo_discord_bot.env
     restart: unless-stopped
     environment:
       - POWER_SAVE_MODE=${POWER_SAVE_MODE:-0}

@@ -203,13 +203,19 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 	}
 	t.dailyCounts.Vandal[dateKey] += added
 	t.dailyCounts.Fix[dateKey] += removed
-	if err := t.saveVandalStateLocked(); err != nil {
+	vandalPayload, vErr := json.MarshalIndent(t.vandalState, "", "  ")
+	dailyPayload, dErr := json.MarshalIndent(t.dailyCounts, "", "  ")
+	t.mu.Unlock()
+	if vErr != nil {
+		log.Printf("failed to marshal vandal state: %v", vErr)
+	} else if err := t.writeFileAtomic("vandalized_pixels.json", vandalPayload); err != nil {
 		log.Printf("failed to save vandal state: %v", err)
 	}
-	if err := t.saveDailyCountsLocked(); err != nil {
+	if dErr != nil {
+		log.Printf("failed to marshal daily counts: %v", dErr)
+	} else if err := t.writeFileAtomic("vandal_daily.json", dailyPayload); err != nil {
 		log.Printf("failed to save daily counts: %v", err)
 	}
-	t.mu.Unlock()
 
 	changes := make([]Pixel, 0)
 	for key, px := range newDiff {
@@ -336,18 +342,25 @@ func (t *Tracker) processPixel(px Pixel) {
 		}
 	}
 
-	if err := t.saveActivityLocked(); err != nil {
-		log.Printf("failed to save user activity: %v", err)
-	}
-	if err := t.saveVandalStateLocked(); err != nil {
-		log.Printf("failed to save vandal state: %v", err)
-	}
+	activityPayload, aErr := json.MarshalIndent(t.activity, "", "  ")
+	vandalPayload, vErr := json.MarshalIndent(t.vandalState, "", "  ")
 	cb := t.newUserCB
 	var userCopy UserActivity
 	if shouldNotify {
 		userCopy = *entry
 	}
 	t.mu.Unlock()
+
+	if aErr != nil {
+		log.Printf("failed to marshal user activity: %v", aErr)
+	} else if err := t.writeFileAtomic("user_activity.json", activityPayload); err != nil {
+		log.Printf("failed to save user activity: %v", err)
+	}
+	if vErr != nil {
+		log.Printf("failed to marshal vandal state: %v", vErr)
+	} else if err := t.writeFileAtomic("vandalized_pixels.json", vandalPayload); err != nil {
+		log.Printf("failed to save vandal state: %v", err)
+	}
 
 	if shouldNotify && cb != nil {
 		cb(notifyKind, userCopy)
@@ -436,11 +449,11 @@ func (t *Tracker) loadState() {
 			}
 			t.activity = entries
 			if dirty {
-				if err := t.saveActivityLocked(); err != nil {
-					log.Printf("failed to migrate user activity: %v", err)
-				}
+			if err := t.saveActivitySnapshot(); err != nil {
+				log.Printf("failed to migrate user activity: %v", err)
 			}
 		}
+	}
 	}
 
 	vandalPath := filepath.Join(t.dataDir, "vandalized_pixels.json")
@@ -474,31 +487,54 @@ func (t *Tracker) loadDailyCounts() {
 	t.dailyCounts = counts
 }
 
-func (t *Tracker) saveActivityLocked() error {
-	path := filepath.Join(t.dataDir, "user_activity.json")
+func (t *Tracker) saveActivitySnapshot() error {
+	t.mu.Lock()
 	payload, err := json.MarshalIndent(t.activity, "", "  ")
+	t.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, payload, 0644)
+	return t.writeFileAtomic("user_activity.json", payload)
 }
 
-func (t *Tracker) saveVandalStateLocked() error {
-	path := filepath.Join(t.dataDir, "vandalized_pixels.json")
-	payload, err := json.MarshalIndent(t.vandalState, "", "  ")
+func (t *Tracker) writeFileAtomic(filename string, payload []byte) error {
+	if t.dataDir == "" {
+		return fmt.Errorf("dataDir is empty")
+	}
+	if err := os.MkdirAll(t.dataDir, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(t.dataDir, filename)
+	tmp, err := os.CreateTemp(t.dataDir, filename+".tmp.*")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, payload, 0644)
-}
-
-func (t *Tracker) saveDailyCountsLocked() error {
-	path := filepath.Join(t.dataDir, "vandal_daily.json")
-	payload, err := json.MarshalIndent(t.dailyCounts, "", "  ")
-	if err != nil {
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
 		return err
 	}
-	return os.WriteFile(path, payload, 0644)
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			_ = os.Remove(tmpName)
+			return removeErr
+		}
+		if err := os.Rename(tmpName, path); err != nil {
+			_ = os.Remove(tmpName)
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureActivityMaps(entry *UserActivity) {

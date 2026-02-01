@@ -71,6 +71,7 @@ type MonitorState struct {
 	DailyPeakDiff      float64
 	DailyPeakAt        time.Time
 	DailyPeakDiffImage []byte
+	heatmapQueue       chan []byte
 	mu                 sync.RWMutex
 }
 
@@ -96,11 +97,14 @@ type ReferencePixels struct {
 
 // NewMonitorState 新しい監視状態を作成
 func NewMonitorState() *MonitorState {
-	return &MonitorState{
+	ms := &MonitorState{
 		DiffHistory:         ring.New(historyLimit),
 		WeightedDiffHistory: ring.New(historyLimit),
 		PowerSaveMode:       false,
+		heatmapQueue:        make(chan []byte, 1),
 	}
+	ms.startHeatmapWorker()
+	return ms
 }
 
 // UpdateData 監視データを更新
@@ -236,18 +240,36 @@ func (ms *MonitorState) UpdateImages(images *ImageData) {
 		return
 	}
 
-	// Heatmap集計を非同期で実行
+	// Heatmap集計はワーカーで最新のみ処理
 	if images != nil && len(images.DiffImage) > 0 {
 		diffImageCopy := make([]byte, len(images.DiffImage))
 		copy(diffImageCopy, images.DiffImage)
-		go ms.updateHeatmapAsync(diffImageCopy)
+		ms.enqueueHeatmap(diffImageCopy)
 	}
 }
 
-// updateHeatmapAsync はヒートマップ集計を非同期で行う
-func (ms *MonitorState) updateHeatmapAsync(diffImage []byte) {
-	if err := ms.updateHeatmap(diffImage); err != nil {
-		return
+func (ms *MonitorState) startHeatmapWorker() {
+	go func() {
+		for diff := range ms.heatmapQueue {
+			if err := ms.updateHeatmap(diff); err != nil {
+				continue
+			}
+		}
+	}()
+}
+
+func (ms *MonitorState) enqueueHeatmap(diffImage []byte) {
+	select {
+	case ms.heatmapQueue <- diffImage:
+	default:
+		select {
+		case <-ms.heatmapQueue:
+		default:
+		}
+		select {
+		case ms.heatmapQueue <- diffImage:
+		default:
+		}
 	}
 }
 

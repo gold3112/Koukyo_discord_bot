@@ -56,13 +56,8 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 		return fmt.Errorf("dataDir is empty")
 	}
 	path := filepath.Join(n.dataDir, "user_activity.json")
-	data, err := os.ReadFile(path)
+	entries, err := readUserActivityWithRetry(path, 3, 100*time.Millisecond)
 	if err != nil {
-		return err
-	}
-
-	var entries map[string]*activity.UserActivity
-	if err := json.Unmarshal(data, &entries); err != nil {
 		return err
 	}
 
@@ -110,6 +105,28 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 	}
 
 	return nil
+}
+
+func readUserActivityWithRetry(path string, attempts int, delay time.Duration) (map[string]*activity.UserActivity, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+		} else {
+			var entries map[string]*activity.UserActivity
+			if err := json.Unmarshal(data, &entries); err != nil {
+				lastErr = err
+			} else {
+				return entries, nil
+			}
+		}
+		time.Sleep(delay)
+	}
+	return nil, lastErr
 }
 
 func buildDailyRankingEmbed(titleDate, summaryText, vandalText, restoreText, activityText, peakLink string) *discordgo.MessageEmbed {
