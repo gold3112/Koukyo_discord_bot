@@ -1,11 +1,8 @@
 package commands
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/png"
 	"strconv"
 	"strings"
 	"time"
@@ -196,99 +193,11 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		if err := respondDeferred(s, i); err != nil {
 			return err
 		}
-		tileX, tileY, pixelX, pixelY, width, height, err := parseFullsizeString(fullsize)
+		imageData, filename, embed, err := c.buildFullsizeResult(fullsize, "")
 		if err != nil {
 			return followupMessage(s, i, "❌ "+err.Error())
 		}
-
-		if tileX < 0 || tileX >= utils.WplaceTilesPerEdge || tileY < 0 || tileY >= utils.WplaceTilesPerEdge {
-			return followupMessage(s, i, fmt.Sprintf("❌ タイル座標が範囲外です: %d-%d 有効範囲: 0～2047", tileX, tileY))
-		}
-		if pixelX < 0 || pixelX >= utils.WplaceTileSize || pixelY < 0 || pixelY >= utils.WplaceTileSize {
-			return followupMessage(s, i, fmt.Sprintf("❌ ピクセル座標が範囲外です: %d-%d 有効範囲: 0～999", pixelX, pixelY))
-		}
-		if width <= 0 || height <= 0 {
-			return followupMessage(s, i, fmt.Sprintf("❌ サイズが不正です: %dx%d", width, height))
-		}
-
-		startTileX := tileX + pixelX/utils.WplaceTileSize
-		startTileY := tileY + pixelY/utils.WplaceTileSize
-		startPixelX := pixelX % utils.WplaceTileSize
-		startPixelY := pixelY % utils.WplaceTileSize
-		endPixelX := startPixelX + width
-		endPixelY := startPixelY + height
-		tilesX := (endPixelX + utils.WplaceTileSize - 1) / utils.WplaceTileSize
-		tilesY := (endPixelY + utils.WplaceTileSize - 1) / utils.WplaceTileSize
-		totalTiles := tilesX * tilesY
-		if totalTiles > 10 {
-			return followupMessage(s, i, fmt.Sprintf("❌ サイズが大きすぎます: %dタイル (%dx%d)", totalTiles, tilesX, tilesY))
-		}
-		if startTileX < 0 || startTileY < 0 || startTileX+tilesX-1 >= utils.WplaceTilesPerEdge || startTileY+tilesY-1 >= utils.WplaceTilesPerEdge {
-			return followupMessage(s, i, "❌ タイル範囲が無効です。")
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		tilesData, err := c.downloadTilesGrid(ctx, startTileX, startTileY, tilesX, tilesY)
-		cancel()
-		if err != nil {
-			return followupMessage(s, i, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
-		}
-
-		cropRect := image.Rect(startPixelX, startPixelY, startPixelX+width, startPixelY+height)
-		cropped, err := combineTilesCropped(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, tilesX, tilesY, cropRect)
-		if err != nil {
-			return followupMessage(s, i, fmt.Sprintf("❌ 画像結合に失敗しました: %v", err))
-		}
-		buf := new(bytes.Buffer)
-		if err := png.Encode(buf, cropped); err != nil {
-			return followupMessage(s, i, fmt.Sprintf("❌ 画像エンコードに失敗しました: %v", err))
-		}
-
-		centerAbsX := float64(tileX*utils.WplaceTileSize+pixelX) + float64(width)/2.0
-		centerAbsY := float64(tileY*utils.WplaceTileSize+pixelY) + float64(height)/2.0
-		centerTileX := int(centerAbsX) / utils.WplaceTileSize
-		centerTileY := int(centerAbsY) / utils.WplaceTileSize
-		centerPixelX := int(centerAbsX) % utils.WplaceTileSize
-		centerPixelY := int(centerAbsY) % utils.WplaceTileSize
-		centerLatLng := utils.TilePixelCenterToLngLat(centerTileX, centerTileY, centerPixelX, centerPixelY)
-		wplaceURL := utils.BuildWplaceURL(centerLatLng.Lng, centerLatLng.Lat, calculateZoomFromWH(width, height))
-
-		filename := fmt.Sprintf("fullsize_%d-%d-%d-%d_%dx%d.png", tileX, tileY, pixelX, pixelY, width, height)
-		embed := &discordgo.MessageEmbed{
-			Title: fmt.Sprintf("🗺️ フルサイズ画像: %dx%dpx", width, height),
-			Color: 0x5865F2,
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "左上座標",
-					Value:  fmt.Sprintf("`%d-%d-%d-%d`", tileX, tileY, pixelX, pixelY),
-					Inline: true,
-				},
-				{
-					Name:   "サイズ",
-					Value:  fmt.Sprintf("`%dx%dpx`", width, height),
-					Inline: true,
-				},
-				{
-					Name:   "使用タイル",
-					Value:  fmt.Sprintf("`%dタイル (%dx%d)`", totalTiles, tilesX, tilesY),
-					Inline: true,
-				},
-				{
-					Name:   "中心座標",
-					Value:  fmt.Sprintf("`%.6f, %.6f`", centerLatLng.Lng, centerLatLng.Lat),
-					Inline: true,
-				},
-				{
-					Name:   "Wplace.live",
-					Value:  fmt.Sprintf("[地図で見る](%s)", wplaceURL),
-					Inline: false,
-				},
-			},
-			Image: &discordgo.MessageEmbedImage{
-				URL: "attachment://" + filename,
-			},
-		}
-		return sendImageFollowup(s, i, buf.Bytes(), filename, embed)
+		return sendImageFollowup(s, i, imageData, filename, embed)
 	}
 
 	return respondGet(s, i, "❌ 座標またはRegion名を指定してください。coords, region, fullsize のいずれかを指定")

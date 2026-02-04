@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"image/png"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"container/list"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -29,6 +28,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"Koukyo_discord_bot/internal/utils"
+	"Koukyo_discord_bot/internal/wplace"
 )
 
 const (
@@ -477,43 +477,11 @@ func buildRegionDetailImage(reg Region, limiter *utils.RateLimiter) (*discordgo.
 		return nil, nil, "", fmt.Errorf("Regionタイル範囲が無効です。")
 	}
 	totalTiles := gridCols * gridRows
-
-	tilesData := make([][]byte, totalTiles)
-	sem := make(chan struct{}, 8)
-	var wg sync.WaitGroup
-	var firstErr error
-	var mu sync.Mutex
-	for ty := minTileY; ty <= maxTileY; ty++ {
-		for tx := minTileX; tx <= maxTileX; tx++ {
-			idx := (ty-minTileY)*gridCols + (tx - minTileX)
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(tileX, tileY, index int) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				data, err := downloadRegionTile(ctx, limiter, tileX, tileY)
-				cancel()
-				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
-					return
-				}
-				tilesData[index] = data
-			}(tx, ty, idx)
-		}
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, nil, "", firstErr
-	}
-	for i, data := range tilesData {
-		if len(data) == 0 {
-			return nil, nil, "", fmt.Errorf("タイル画像のダウンロードに失敗しました (index=%d)", i)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	tilesData, err := wplace.DownloadTilesGrid(ctx, limiter, minTileX, minTileY, gridCols, gridRows, 16)
+	cancel()
+	if err != nil {
+		return nil, nil, "", err
 	}
 
 	buf, err := combineTiles(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, gridCols, gridRows)
@@ -527,7 +495,7 @@ func buildRegionDetailImage(reg Region, limiter *utils.RateLimiter) (*discordgo.
 	centerLng := reg.CenterLatLng[1]
 	imageWidth := gridCols * utils.WplaceTileSize
 	imageHeight := gridRows * utils.WplaceTileSize
-		wplaceURL := utils.BuildWplaceURL(centerLng, centerLat, calculateZoomFromWH(imageWidth, imageHeight))
+	wplaceURL := utils.BuildWplaceURL(centerLng, centerLat, calculateZoomFromWH(imageWidth, imageHeight))
 
 	embed := &discordgo.MessageEmbed{
 		Title: fmt.Sprintf("🗺️ %s 全域画像", displayName),
@@ -574,43 +542,6 @@ func buildRegionDetailImage(reg Region, limiter *utils.RateLimiter) (*discordgo.
 		},
 	}
 	return embed, buf, filename, nil
-}
-
-func downloadRegionTile(ctx context.Context, limiter *utils.RateLimiter, tlx, tly int) ([]byte, error) {
-	if limiter == nil {
-		return nil, fmt.Errorf("rate limiter is nil")
-	}
-	cacheKey := fmt.Sprintf("%d-%d", tlx, tly)
-	if data, ok := getTileFromCache(cacheKey); ok {
-		return data, nil
-	}
-	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tlx, tly)
-	val, err := limiter.Do(ctx, "backend.wplace.live", func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := tileHTTPClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("HTTP GET failed for %s: %w", url, err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("failed to download tile %d-%d (URL: %s), status: %s", tlx, tly, url, resp.Status)
-		}
-		return io.ReadAll(resp.Body)
-	})
-	if err != nil {
-		return nil, err
-	}
-	data, ok := val.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tlx, tly)
-	}
-	if len(data) > 0 {
-		storeTileCache(cacheKey, data)
-	}
-	return data, nil
 }
 
 func searchRegionsByCity(database RegionDB, cityName string) map[string]Region {

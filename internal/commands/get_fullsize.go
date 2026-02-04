@@ -76,22 +76,37 @@ func parseFullsizeString(fullsize string) (tileX, tileY, pixelX, pixelY, width, 
 }
 
 func (c *GetCommand) ExecuteFullsizeText(s *discordgo.Session, m *discordgo.MessageCreate, fullsize, label string) error {
-	tileX, tileY, pixelX, pixelY, width, height, err := parseFullsizeString(fullsize)
+	imageData, filename, embed, err := c.buildFullsizeResult(fullsize, label)
 	if err != nil {
 		_, e := s.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
 		return e
 	}
+	_, sendErr := s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
+		Embeds: []*discordgo.MessageEmbed{embed},
+		Files: []*discordgo.File{
+			{
+				Name:        filename,
+				ContentType: "image/png",
+				Reader:      bytes.NewReader(imageData),
+			},
+		},
+	})
+	return sendErr
+}
+
+func (c *GetCommand) buildFullsizeResult(fullsize, label string) ([]byte, string, *discordgo.MessageEmbed, error) {
+	tileX, tileY, pixelX, pixelY, width, height, err := parseFullsizeString(fullsize)
+	if err != nil {
+		return nil, "", nil, err
+	}
 	if tileX < 0 || tileX >= utils.WplaceTilesPerEdge || tileY < 0 || tileY >= utils.WplaceTilesPerEdge {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ タイル座標が範囲外です: %d-%d 有効範囲: 0～2047", tileX, tileY))
-		return e
+		return nil, "", nil, fmt.Errorf("タイル座標が範囲外です: %d-%d 有効範囲: 0～2047", tileX, tileY)
 	}
 	if pixelX < 0 || pixelX >= utils.WplaceTileSize || pixelY < 0 || pixelY >= utils.WplaceTileSize {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ ピクセル座標が範囲外です: %d-%d 有効範囲: 0～999", pixelX, pixelY))
-		return e
+		return nil, "", nil, fmt.Errorf("ピクセル座標が範囲外です: %d-%d 有効範囲: 0～999", pixelX, pixelY)
 	}
 	if width <= 0 || height <= 0 {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ サイズが不正です: %dx%d", width, height))
-		return e
+		return nil, "", nil, fmt.Errorf("サイズが不正です: %dx%d", width, height)
 	}
 
 	startTileX := tileX + pixelX/utils.WplaceTileSize
@@ -104,32 +119,27 @@ func (c *GetCommand) ExecuteFullsizeText(s *discordgo.Session, m *discordgo.Mess
 	tilesY := (endPixelY + utils.WplaceTileSize - 1) / utils.WplaceTileSize
 	totalTiles := tilesX * tilesY
 	if totalTiles > 10 {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ サイズが大きすぎます: %dタイル (%dx%d)", totalTiles, tilesX, tilesY))
-		return e
+		return nil, "", nil, fmt.Errorf("サイズが大きすぎます: %dタイル (%dx%d)", totalTiles, tilesX, tilesY)
 	}
 	if startTileX < 0 || startTileY < 0 || startTileX+tilesX-1 >= utils.WplaceTilesPerEdge || startTileY+tilesY-1 >= utils.WplaceTilesPerEdge {
-		_, e := s.ChannelMessageSend(m.ChannelID, "❌ タイル範囲が無効です。")
-		return e
+		return nil, "", nil, fmt.Errorf("タイル範囲が無効です")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	tilesData, err := c.downloadTilesGrid(ctx, startTileX, startTileY, tilesX, tilesY)
 	cancel()
 	if err != nil {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ タイル画像のダウンロードに失敗しました: %v", err))
-		return e
+		return nil, "", nil, fmt.Errorf("タイル画像のダウンロードに失敗しました: %w", err)
 	}
 
 	cropRect := image.Rect(startPixelX, startPixelY, startPixelX+width, startPixelY+height)
 	cropped, err := combineTilesCropped(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, tilesX, tilesY, cropRect)
 	if err != nil {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ 画像結合に失敗しました: %v", err))
-		return e
+		return nil, "", nil, fmt.Errorf("画像結合に失敗しました: %w", err)
 	}
 	buf := new(bytes.Buffer)
 	if err := png.Encode(buf, cropped); err != nil {
-		_, e := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("❌ 画像エンコードに失敗しました: %v", err))
-		return e
+		return nil, "", nil, fmt.Errorf("画像エンコードに失敗しました: %w", err)
 	}
 
 	centerAbsX := float64(tileX*utils.WplaceTileSize+pixelX) + float64(width)/2.0
@@ -180,15 +190,5 @@ func (c *GetCommand) ExecuteFullsizeText(s *discordgo.Session, m *discordgo.Mess
 			URL: "attachment://" + filename,
 		},
 	}
-	_, sendErr := s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-		Embeds: []*discordgo.MessageEmbed{embed},
-		Files: []*discordgo.File{
-			{
-				Name:        filename,
-				ContentType: "image/png",
-				Reader:      bytes.NewReader(buf.Bytes()),
-			},
-		},
-	})
-	return sendErr
+	return buf.Bytes(), filename, embed, nil
 }

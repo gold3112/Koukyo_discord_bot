@@ -100,6 +100,8 @@ go run ./cmd/bot
 - `data/vandalized_pixels.json`
 - `data/vandal_daily.json`
 - `data/achievements.json`
+- `data/watch_targets.json` (追加監視ターゲット定義)
+- `data/template_img/` (監視用テンプレート画像)
 
 ## Discord 側の設定
 

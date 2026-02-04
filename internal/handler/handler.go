@@ -7,6 +7,8 @@ import (
 	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/notifications"
 	"Koukyo_discord_bot/internal/utils" // これを追加
+	"sync"
+	"time"
 )
 
 type Handler struct {
@@ -18,6 +20,10 @@ type Handler struct {
 	notifier *notifications.Notifier
 	limiter  *utils.RateLimiter // これを追加
 	dataDir  string
+
+	readyMu          sync.Mutex
+	readyInitialized bool
+	lastReadyAt      time.Time
 }
 
 func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, settingsManager *config.SettingsManager, notifier *notifications.Notifier, limiter *utils.RateLimiter, activityLimiter *utils.RateLimiter, dataDir string) *Handler { // limiter 引数を追加

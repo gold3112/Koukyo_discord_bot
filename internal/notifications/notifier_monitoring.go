@@ -14,6 +14,7 @@ import (
 // StartMonitoring 全サーバーの監視を開始
 func (n *Notifier) StartMonitoring() {
 	n.startDailyRankingLoop()
+	n.startWatchTargetsLoop()
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()

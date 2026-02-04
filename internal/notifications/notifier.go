@@ -33,6 +33,7 @@ type Notifier struct {
 	lastDailyReportDate      string
 	vandalUserNotifier       *VandalUserNotifier
 	fixUserNotifier          *FixUserNotifier
+	watchTargetsState        *watchTargetsRuntime
 }
 
 // NewNotifier 通知システムを作成
@@ -45,6 +46,7 @@ func NewNotifier(session *discordgo.Session, mon *monitor.Monitor, settings *con
 		dataDir:            dataDir,
 		vandalUserNotifier: NewVandalUserNotifier(session, settings),
 		fixUserNotifier:    NewFixUserNotifier(session, settings),
+		watchTargetsState:  newWatchTargetsRuntime(dataDir),
 	}
 }
 

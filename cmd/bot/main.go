@@ -104,6 +104,7 @@ func main() {
 
 	h := handler.NewHandler("!", botInfo, globalMonitor, settingsManager, notifier, limiter, activityLimiter, dataDir) // settingsManager を渡す
 	dg.AddHandler(h.OnReady)
+	dg.AddHandler(h.OnResumed)
 	dg.AddHandler(h.OnMessage)
 	dg.AddHandler(h.OnInteractionCreate)
 

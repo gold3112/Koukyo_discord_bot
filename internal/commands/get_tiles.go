@@ -7,203 +7,23 @@ import (
 	"image"
 	"image/draw"
 	"image/png"
-	"io"
-	"math"
-	"net/http"
-	"container/list"
-	"sync"
-	"time"
+
+	"Koukyo_discord_bot/internal/utils"
+	"Koukyo_discord_bot/internal/wplace"
 )
 
-const (
-	getTileCacheTTL         = 2 * time.Minute
-	getTileMaxConcurrent    = 16
-	getTileCacheMaxEntries  = 512
-	getTileDecodeConcurrent = 8
-)
+const getTileMaxConcurrent = 16
 
-var tileHTTPClient = &http.Client{
-	Timeout: 12 * time.Second,
-	Transport: &http.Transport{
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   32,
-		MaxConnsPerHost:       32,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	},
-}
-
-type tileCacheEntry struct {
-	data      []byte
-	expiresAt time.Time
-	element   *list.Element
-}
-
-var tileCache struct {
-	mu    sync.Mutex
-	items map[string]*tileCacheEntry
-	order *list.List
-}
-
-func init() {
-	tileCache.items = make(map[string]*tileCacheEntry)
-	tileCache.order = list.New()
-}
-
-// downloadTile 単一のタイル画像をダウンロードするヘルパー関数
-func (c *GetCommand) downloadTile(ctx context.Context, tlx, tly int) ([]byte, error) {
-	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tlx, tly)
-	cacheKey := fmt.Sprintf("%d-%d", tlx, tly)
-	if data, ok := getTileFromCache(cacheKey); ok {
-		return data, nil
-	}
-
-	val, err := c.limiter.Do(ctx, "backend.wplace.live", func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := tileHTTPClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("HTTP GET failed for %s: %w", url, err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("failed to download tile %d-%d (URL: %s), status: %s", tlx, tly, url, resp.Status)
-		}
-		return io.ReadAll(resp.Body)
-	})
-	if err != nil {
-		return nil, err
-	}
-	data, ok := val.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tlx, tly)
-	}
-	if len(data) > 0 {
-		storeTileCache(cacheKey, data)
-	}
-	return data, nil
-}
-
-func getTileFromCache(key string) ([]byte, bool) {
-	tileCache.mu.Lock()
-	defer tileCache.mu.Unlock()
-	entry, ok := tileCache.items[key]
-	if !ok {
-		return nil, false
-	}
-	if time.Now().After(entry.expiresAt) {
-		removeTileCacheEntryLocked(key, entry)
-		return nil, false
-	}
-	if entry.element != nil {
-		tileCache.order.MoveToFront(entry.element)
-	}
-	return entry.data, true
-}
-
-func storeTileCache(key string, data []byte) {
-	tileCache.mu.Lock()
-	defer tileCache.mu.Unlock()
-
-	if existing, ok := tileCache.items[key]; ok {
-		existing.data = data
-		existing.expiresAt = time.Now().Add(getTileCacheTTL)
-		if existing.element != nil {
-			tileCache.order.MoveToFront(existing.element)
-		}
-		return
-	}
-
-	entry := &tileCacheEntry{
-		data:      data,
-		expiresAt: time.Now().Add(getTileCacheTTL),
-	}
-	entry.element = tileCache.order.PushFront(key)
-	tileCache.items[key] = entry
-
-	for tileCache.order.Len() > getTileCacheMaxEntries {
-		back := tileCache.order.Back()
-		if back == nil {
-			break
-		}
-		backKey, ok := back.Value.(string)
-		if !ok {
-			tileCache.order.Remove(back)
-			continue
-		}
-		if victim, ok := tileCache.items[backKey]; ok {
-			removeTileCacheEntryLocked(backKey, victim)
-		} else {
-			tileCache.order.Remove(back)
-		}
-	}
-}
-
-func removeTileCacheEntryLocked(key string, entry *tileCacheEntry) {
-	delete(tileCache.items, key)
-	if entry.element != nil {
-		tileCache.order.Remove(entry.element)
-	}
+// downloadTile 単一のタイル画像をダウンロードする。
+func (c *GetCommand) downloadTile(ctx context.Context, tileX, tileY int) ([]byte, error) {
+	return wplace.DownloadTile(ctx, c.limiter, tileX, tileY)
 }
 
 func (c *GetCommand) downloadTilesGrid(ctx context.Context, minX, minY, cols, rows int) ([][]byte, error) {
-	total := cols * rows
-	tiles := make([][]byte, total)
-	sem := make(chan struct{}, getTileMaxConcurrent)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	for y := 0; y < rows; y++ {
-		for x := 0; x < cols; x++ {
-			tileX := minX + x
-			tileY := minY + y
-			idx := y*cols + x
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(ix, iy, index int) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				if ctx.Err() != nil {
-					return
-				}
-				reqCtx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
-				data, err := c.downloadTile(reqCtx, ix, iy)
-				cancelReq()
-				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-						cancel()
-					}
-					mu.Unlock()
-					return
-				}
-				tiles[index] = data
-			}(tileX, tileY, idx)
-		}
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	for i, data := range tiles {
-		if len(data) == 0 {
-			return nil, fmt.Errorf("タイル画像のダウンロードに失敗しました (index=%d)", i)
-		}
-	}
-	return tiles, nil
+	return wplace.DownloadTilesGrid(ctx, c.limiter, minX, minY, cols, rows, getTileMaxConcurrent)
 }
 
-// combineTiles 複数のタイル画像を結合するヘルパー関数
-// tilesData: 各タイル画像のバイトスライス
-// tileWidth, tileHeight: 単一タイルの幅と高さ (ピクセル)
-// gridCols, gridRows: タイルを配置するグリッドの列数と行数
+// combineTiles 複数のタイル画像を結合しPNGバイトにする。
 func combineTiles(tilesData [][]byte, tileWidth, tileHeight, gridCols, gridRows int) (*bytes.Buffer, error) {
 	img, err := combineTilesImage(tilesData, tileWidth, tileHeight, gridCols, gridRows)
 	if err != nil {
@@ -217,127 +37,29 @@ func combineTiles(tilesData [][]byte, tileWidth, tileHeight, gridCols, gridRows 
 }
 
 func combineTilesImage(tilesData [][]byte, tileWidth, tileHeight, gridCols, gridRows int) (*image.RGBA, error) {
-	if len(tilesData) == 0 {
-		return nil, fmt.Errorf("結合する画像データがありません")
+	nrgba, err := wplace.CombineTilesImage(tilesData, tileWidth, tileHeight, gridCols, gridRows)
+	if err != nil {
+		return nil, err
 	}
-	if len(tilesData) != gridCols*gridRows {
-		return nil, fmt.Errorf("画像データの数 (%d) がグリッドサイズ (%d x %d) と一致しません", len(tilesData), gridCols, gridRows)
-	}
-
-	combinedWidth := tileWidth * gridCols
-	combinedHeight := tileHeight * gridRows
-	combinedImg := image.NewRGBA(image.Rect(0, 0, combinedWidth, combinedHeight))
-
-	var drawMu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, getTileDecodeConcurrent)
-	var firstErr error
-	var errMu sync.Mutex
-
-	for i, data := range tilesData {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(index int, payload []byte) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			tileImg, err := png.Decode(bytes.NewReader(payload))
-			if err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", index, err)
-				}
-				errMu.Unlock()
-				return
-			}
-
-			col := index % gridCols
-			row := index / gridCols
-			dp := image.Pt(col*tileWidth, row*tileHeight)
-			drawMu.Lock()
-			draw.Draw(combinedImg, tileImg.Bounds().Add(dp), tileImg, image.Point{}, draw.Src)
-			drawMu.Unlock()
-		}(i, data)
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-
-	return combinedImg, nil
+	return nrgbaToRGBA(nrgba), nil
 }
 
 // combineTilesCropped combines tiles but only renders a cropped region to reduce memory usage.
 // cropRect is relative to the combined image's coordinate system.
 func combineTilesCropped(tilesData [][]byte, tileWidth, tileHeight, gridCols, gridRows int, cropRect image.Rectangle) (*image.RGBA, error) {
-	if len(tilesData) == 0 {
-		return nil, fmt.Errorf("結合する画像データがありません")
+	nrgba, err := wplace.CombineTilesCroppedImage(tilesData, tileWidth, tileHeight, gridCols, gridRows, cropRect)
+	if err != nil {
+		return nil, err
 	}
-	if len(tilesData) != gridCols*gridRows {
-		return nil, fmt.Errorf("画像データの数 (%d) がグリッドサイズ (%d x %d) と一致しません", len(tilesData), gridCols, gridRows)
-	}
-	if cropRect.Dx() <= 0 || cropRect.Dy() <= 0 {
-		return nil, fmt.Errorf("クロップ範囲が不正です")
-	}
+	return nrgbaToRGBA(nrgba), nil
+}
 
-	out := image.NewRGBA(image.Rect(0, 0, cropRect.Dx(), cropRect.Dy()))
-
-	var drawMu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, getTileDecodeConcurrent)
-	var firstErr error
-	var errMu sync.Mutex
-
-	for i, data := range tilesData {
-		col := i % gridCols
-		row := i / gridCols
-		tileRect := image.Rect(col*tileWidth, row*tileHeight, (col+1)*tileWidth, (row+1)*tileHeight)
-		inter := tileRect.Intersect(cropRect)
-		if inter.Dx() <= 0 || inter.Dy() <= 0 {
-			continue
-		}
-
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(index int, payload []byte, tileR, interR image.Rectangle) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			tileImg, err := png.Decode(bytes.NewReader(payload))
-			if err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("タイル画像のデコードに失敗しました (インデックス %d): %w", index, err)
-				}
-				errMu.Unlock()
-				return
-			}
-
-			dstRect := image.Rect(
-				interR.Min.X-cropRect.Min.X,
-				interR.Min.Y-cropRect.Min.Y,
-				interR.Max.X-cropRect.Min.X,
-				interR.Max.Y-cropRect.Min.Y,
-			)
-			srcPt := image.Pt(interR.Min.X-tileR.Min.X, interR.Min.Y-tileR.Min.Y)
-			drawMu.Lock()
-			draw.Draw(out, dstRect, tileImg, srcPt, draw.Src)
-			drawMu.Unlock()
-		}(i, data, tileRect, inter)
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-
-	return out, nil
+func nrgbaToRGBA(src *image.NRGBA) *image.RGBA {
+	dst := image.NewRGBA(src.Bounds())
+	draw.Draw(dst, dst.Bounds(), src, src.Bounds().Min, draw.Src)
+	return dst
 }
 
 func calculateZoomFromWH(width, height int) float64 {
-	a := 21.16849365
-	bw := -0.45385241
-	bh := -2.76763227
-	raw := a + bw*math.Log10(float64(width)) + bh*math.Log10(float64(height))
-	if raw < 10.7 {
-		return 10.7
-	}
-	return raw
+	return utils.ZoomFromImageSize(width, height)
 }
