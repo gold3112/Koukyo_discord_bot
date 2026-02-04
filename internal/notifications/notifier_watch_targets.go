@@ -1,12 +1,14 @@
 package notifications
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"image"
-	_ "image/jpeg"
-	_ "image/png"
+	"image/color"
+	"image/png"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"Koukyo_discord_bot/internal/config"
+	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/utils"
 	"Koukyo_discord_bot/internal/wplace"
 
@@ -41,7 +45,7 @@ type watchTargetConfig struct {
 type watchTargetStatus struct {
 	NextRun     time.Time
 	Running     bool
-	LastHasDiff *bool
+	GuildStates map[string]*NotificationState
 }
 
 type watchTemplate struct {
@@ -65,6 +69,26 @@ type watchTargetsRuntime struct {
 	statuses      map[string]*watchTargetStatus
 	errorNotified map[string]bool
 	templateCache map[string]*watchTemplateCacheEntry
+}
+
+type watchTargetResult struct {
+	coord      *utils.Coordinate
+	template   *watchTemplate
+	diffPixels int
+	percent    float64
+	wplaceURL  string
+	fullsize   string
+	livePNG    []byte
+	diffPNG    []byte
+	mergedPNG  []byte
+}
+
+type watchTargetEval struct {
+	sendIncrease bool
+	sendDecrease bool
+	sendRecover  bool
+	sendComplete bool
+	tier         Tier
 }
 
 func newWatchTargetsRuntime(dataDir string) *watchTargetsRuntime {
@@ -110,15 +134,44 @@ func (n *Notifier) startWatchTargetsLoop() {
 }
 
 func (n *Notifier) runWatchTarget(target watchTargetConfig) {
-	template, err := n.watchTargetsState.loadTemplate(target.Template)
+	result, err := n.buildWatchTargetResult(target)
 	if err != nil {
 		n.handleWatchTargetError(target, err, true)
 		return
 	}
+	for _, guild := range n.session.State.Guilds {
+		settings := n.settings.GetGuildSettings(guild.ID)
+		if !settings.AutoNotifyEnabled || settings.NotificationChannel == nil {
+			continue
+		}
+		eval := n.watchTargetsState.evaluateAndUpdateGuild(target.ID, guild.ID, result.percent, settings.NotificationThreshold)
+		if !eval.sendIncrease && !eval.sendDecrease && !eval.sendRecover && !eval.sendComplete {
+			continue
+		}
+		if eval.sendRecover {
+			n.sendWatchTargetZeroRecoveryNotification(*settings.NotificationChannel, settings, target, result)
+		}
+		if eval.sendComplete {
+			n.sendWatchTargetZeroCompletionNotification(*settings.NotificationChannel, settings, target, result)
+		}
+		if eval.sendIncrease {
+			n.sendWatchTargetIncreaseNotification(*settings.NotificationChannel, settings, target, result, eval.tier)
+		}
+		if eval.sendDecrease {
+			n.sendWatchTargetDecreaseNotification(*settings.NotificationChannel, settings, target, result, eval.tier)
+		}
+	}
+	n.watchTargetsState.clearErrorNotified(target.ID)
+}
+
+func (n *Notifier) buildWatchTargetResult(target watchTargetConfig) (*watchTargetResult, error) {
+	template, err := n.watchTargetsState.loadTemplate(target.Template)
+	if err != nil {
+		return nil, err
+	}
 	coord, err := parseWatchOrigin(target.Origin)
 	if err != nil {
-		n.handleWatchTargetError(target, err, true)
-		return
+		return nil, err
 	}
 
 	startTileX := coord.TileX + coord.PixelX/utils.WplaceTileSize
@@ -130,67 +183,242 @@ func (n *Notifier) runWatchTarget(target watchTargetConfig) {
 	tilesX := (endPixelX + utils.WplaceTileSize - 1) / utils.WplaceTileSize
 	tilesY := (endPixelY + utils.WplaceTileSize - 1) / utils.WplaceTileSize
 	if startTileX < 0 || startTileY < 0 || startTileX+tilesX-1 >= utils.WplaceTilesPerEdge || startTileY+tilesY-1 >= utils.WplaceTilesPerEdge {
-		n.handleWatchTargetError(target, fmt.Errorf("watch origin out of range: %s", target.Origin), true)
-		return
+		return nil, fmt.Errorf("watch origin out of range: %s", target.Origin)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	tilesData, err := wplace.DownloadTilesGrid(ctx, nil, startTileX, startTileY, tilesX, tilesY, 16)
 	cancel()
 	if err != nil {
-		log.Printf("watch_targets: download failed for %s: %v", target.ID, err)
-		return
+		return nil, fmt.Errorf("download failed: %w", err)
 	}
 
 	cropRect := image.Rect(startPixelX, startPixelY, startPixelX+template.Width, startPixelY+template.Height)
 	liveImg, err := wplace.CombineTilesCroppedImage(tilesData, utils.WplaceTileSize, utils.WplaceTileSize, tilesX, tilesY, cropRect)
 	if err != nil {
-		log.Printf("watch_targets: combine failed for %s: %v", target.ID, err)
-		return
+		return nil, fmt.Errorf("combine failed: %w", err)
 	}
 
-	diffPixels := compareTemplateDiff(template, liveImg)
-	hasDiff := diffPixels > 0
-	changed, lastKnown := n.watchTargetsState.updateDiffStatus(target.ID, hasDiff)
-	if !changed {
-		return
-	}
-
+	diffPixels, diffMask := buildDiffMask(template, liveImg)
 	percent := 0.0
 	if template.OpaqueCount > 0 {
 		percent = float64(diffPixels) * 100 / float64(template.OpaqueCount)
 	}
+	livePNG, err := encodePNG(liveImg)
+	if err != nil {
+		return nil, err
+	}
+	diffPNG, err := encodePNG(diffMask)
+	if err != nil {
+		return nil, err
+	}
+	mergedPNG, err := buildCombinedPreview(livePNG, diffPNG)
+	if err != nil {
+		return nil, err
+	}
+
 	center := watchAreaCenter(coord, template.Width, template.Height)
-	wplaceURL := utils.BuildWplaceURL(center.Lng, center.Lat, utils.ZoomFromImageSize(template.Width, template.Height))
-	n.sendWatchTargetDiffNotification(target, hasDiff, lastKnown, diffPixels, template.OpaqueCount, percent, wplaceURL)
-	n.watchTargetsState.clearErrorNotified(target.ID)
+	return &watchTargetResult{
+		coord:      coord,
+		template:   template,
+		diffPixels: diffPixels,
+		percent:    percent,
+		wplaceURL:  utils.BuildWplaceURL(center.Lng, center.Lat, utils.ZoomFromImageSize(template.Width, template.Height)),
+		fullsize:   fmt.Sprintf("%d-%d-%d-%d-%d-%d", coord.TileX, coord.TileY, coord.PixelX, coord.PixelY, template.Width, template.Height),
+		livePNG:    livePNG,
+		diffPNG:    diffPNG,
+		mergedPNG:  mergedPNG,
+	}, nil
 }
 
-func compareTemplateDiff(template *watchTemplate, live *image.NRGBA) int {
+func buildDiffMask(template *watchTemplate, live *image.NRGBA) (int, *image.NRGBA) {
+	mask := image.NewNRGBA(image.Rect(0, 0, template.Width, template.Height))
 	if template == nil || template.Img == nil || live == nil {
-		return 0
+		return 0, mask
 	}
 	bounds := template.Img.Bounds()
 	if live.Bounds().Dx() != bounds.Dx() || live.Bounds().Dy() != bounds.Dy() {
-		return template.OpaqueCount
+		fillOpaqueMask(mask, template)
+		return template.OpaqueCount, mask
 	}
 	diff := 0
+	diffColor := color.NRGBA{R: 255, G: 0, B: 0, A: 255}
 	for y := 0; y < bounds.Dy(); y++ {
 		for x := 0; x < bounds.Dx(); x++ {
 			ti := y*template.Img.Stride + x*4
-			alpha := template.Img.Pix[ti+3]
-			if alpha == 0 {
+			if template.Img.Pix[ti+3] == 0 {
 				continue
 			}
 			li := y*live.Stride + x*4
 			if template.Img.Pix[ti] != live.Pix[li] ||
 				template.Img.Pix[ti+1] != live.Pix[li+1] ||
 				template.Img.Pix[ti+2] != live.Pix[li+2] {
+				mask.SetNRGBA(x, y, diffColor)
 				diff++
 			}
 		}
 	}
-	return diff
+	return diff, mask
+}
+
+func fillOpaqueMask(mask *image.NRGBA, template *watchTemplate) {
+	diffColor := color.NRGBA{R: 255, G: 0, B: 0, A: 255}
+	for y := 0; y < template.Height; y++ {
+		for x := 0; x < template.Width; x++ {
+			idx := y*template.Img.Stride + x*4 + 3
+			if template.Img.Pix[idx] != 0 {
+				mask.SetNRGBA(x, y, diffColor)
+			}
+		}
+	}
+}
+
+func encodePNG(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func buildCombinedPreview(livePNG, diffPNG []byte) ([]byte, error) {
+	mergedReader, err := embeds.CombineImages(livePNG, diffPNG)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(mergedReader)
+}
+
+func (n *Notifier) sendWatchTargetIncreaseNotification(
+	channelID string,
+	settings config.GuildSettings,
+	target watchTargetConfig,
+	result *watchTargetResult,
+	tier Tier,
+) {
+	mentionStr := ""
+	if result.percent >= settings.MentionThreshold && settings.MentionRole != nil {
+		mentionStr = fmt.Sprintf("<@&%s> ", *settings.MentionRole)
+	}
+	tierDesc := "変動"
+	switch tier {
+	case Tier50:
+		tierDesc = "50%以上に急増"
+	case Tier40:
+		tierDesc = "40%台に増加"
+	case Tier30:
+		tierDesc = "30%台に増加"
+	case Tier20:
+		tierDesc = "20%台に増加"
+	case Tier10:
+		tierDesc = "10%台に増加"
+	}
+
+	content := fmt.Sprintf("%s【Wplace速報】 🚨 差分率が%sしました！[現在%.2f%%]\n対象: `%s`", mentionStr, tierDesc, result.percent, target.Label)
+	embed := n.buildWatchTargetEmbed("🏯 Wplace 荒らし検知 (追加監視)", target, result, getTierColor(tier))
+	n.sendWatchTargetMessage(channelID, content, embed, target, result)
+}
+
+func (n *Notifier) sendWatchTargetDecreaseNotification(
+	channelID string,
+	settings config.GuildSettings,
+	target watchTargetConfig,
+	result *watchTargetResult,
+	tier Tier,
+) {
+	content := fmt.Sprintf("【Wplace速報】 差分率が%sまで減少しました。[現在%.2f%%]\n対象: `%s`", tierRangeLabel(tier, settings.NotificationThreshold), result.percent, target.Label)
+	embed := n.buildWatchTargetEmbed("🏯 Wplace 差分減少 (追加監視)", target, result, getTierColor(tier))
+	n.sendWatchTargetMessage(channelID, content, embed, target, result)
+}
+
+func (n *Notifier) sendWatchTargetZeroRecoveryNotification(
+	channelID string,
+	_ config.GuildSettings,
+	target watchTargetConfig,
+	result *watchTargetResult,
+) {
+	content := fmt.Sprintf("🔔 【Wplace速報】変化検知 差分率: **%.2f%%**に上昇\n対象: `%s`", result.percent, target.Label)
+	embed := n.buildWatchTargetEmbed("🟢 Wplace 変化検知 (追加監視)", target, result, 0x00FF00)
+	n.sendWatchTargetMessage(channelID, content, embed, target, result)
+}
+
+func (n *Notifier) sendWatchTargetZeroCompletionNotification(
+	channelID string,
+	_ config.GuildSettings,
+	target watchTargetConfig,
+	result *watchTargetResult,
+) {
+	content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ 差分率: **0.00%%** # Pixel Perfect!\n対象: `%s`", target.Label)
+	embed := n.buildWatchTargetEmbed("🎉 Wplace 修復完了 (追加監視)", target, result, 0x00FF00)
+	n.sendWatchTargetMessage(channelID, content, embed, target, result)
+}
+
+func (n *Notifier) buildWatchTargetEmbed(title string, target watchTargetConfig, result *watchTargetResult, colorCode int) *discordgo.MessageEmbed {
+	embed := &discordgo.MessageEmbed{
+		Title:       title,
+		Description: fmt.Sprintf("対象 `%s` の監視結果", target.Label),
+		Color:       colorCode,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "差分率",
+				Value:  fmt.Sprintf("%.2f%%", result.percent),
+				Inline: true,
+			},
+			{
+				Name:   "差分ピクセル",
+				Value:  fmt.Sprintf("%d / %d", result.diffPixels, result.template.OpaqueCount),
+				Inline: true,
+			},
+			{
+				Name:   "対象",
+				Value:  fmt.Sprintf("`%s`", target.Label),
+				Inline: true,
+			},
+			{
+				Name:   "左上座標",
+				Value:  fmt.Sprintf("`%s`", target.Origin),
+				Inline: true,
+			},
+			{
+				Name:   "監視サイズ",
+				Value:  fmt.Sprintf("`%dx%d`", result.template.Width, result.template.Height),
+				Inline: true,
+			},
+			{
+				Name:   "Wplace.live",
+				Value:  fmt.Sprintf("[地図で見る](%s)\n`/get fullsize:%s`", result.wplaceURL, result.fullsize),
+				Inline: false,
+			},
+		},
+		Image: &discordgo.MessageEmbedImage{
+			URL: "attachment://watch_preview.png",
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+	return embed
+}
+
+func (n *Notifier) sendWatchTargetMessage(
+	channelID string,
+	content string,
+	embed *discordgo.MessageEmbed,
+	target watchTargetConfig,
+	result *watchTargetResult,
+) {
+	_, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content: content,
+		Embeds:  []*discordgo.MessageEmbed{embed},
+		Files: []*discordgo.File{
+			{
+				Name:        "watch_preview.png",
+				ContentType: "image/png",
+				Reader:      bytes.NewReader(result.mergedPNG),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("watch_targets: notify failed channel=%s target=%s err=%v", channelID, target.ID, err)
+	}
 }
 
 func (n *Notifier) handleWatchTargetError(target watchTargetConfig, err error, notifyOnce bool) {
@@ -202,67 +430,6 @@ func (n *Notifier) handleWatchTargetError(target watchTargetConfig, err error, n
 		return
 	}
 	n.sendWatchTargetErrorNotification(target, err)
-}
-
-func (n *Notifier) sendWatchTargetDiffNotification(
-	target watchTargetConfig,
-	hasDiff bool,
-	lastKnown bool,
-	diffPixels int,
-	totalPixels int,
-	percent float64,
-	wplaceURL string,
-) {
-	for _, guild := range n.session.State.Guilds {
-		settings := n.settings.GetGuildSettings(guild.ID)
-		if !settings.AutoNotifyEnabled || settings.NotificationChannel == nil {
-			continue
-		}
-		title := "✅ 追加監視: 修復完了"
-		desc := fmt.Sprintf("対象 `%s` がテンプレート一致に戻りました。", target.Label)
-		color := 0x2ECC71
-		if hasDiff {
-			title = "🚨 追加監視: 差分検知"
-			desc = fmt.Sprintf("対象 `%s` に差分があります。", target.Label)
-			color = 0xE74C3C
-			if !lastKnown {
-				desc = fmt.Sprintf("対象 `%s` に新たな差分が発生しました。", target.Label)
-			}
-		}
-
-		embed := &discordgo.MessageEmbed{
-			Title:       title,
-			Description: desc,
-			Color:       color,
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "差分ピクセル",
-					Value:  fmt.Sprintf("%d / %d (%.2f%%)", diffPixels, totalPixels, percent),
-					Inline: true,
-				},
-				{
-					Name:   "対象",
-					Value:  fmt.Sprintf("`%s`", target.Label),
-					Inline: true,
-				},
-				{
-					Name:   "座標",
-					Value:  fmt.Sprintf("`%s`", target.Origin),
-					Inline: false,
-				},
-				{
-					Name:   "Wplace.live",
-					Value:  fmt.Sprintf("[地図で見る](%s)", wplaceURL),
-					Inline: false,
-				},
-			},
-			Timestamp: time.Now().Format(time.RFC3339),
-		}
-
-		if _, err := n.session.ChannelMessageSendEmbed(*settings.NotificationChannel, embed); err != nil {
-			log.Printf("watch_targets: notify failed guild=%s target=%s err=%v", guild.ID, target.ID, err)
-		}
-	}
 }
 
 func (n *Notifier) sendWatchTargetErrorNotification(target watchTargetConfig, err error) {
@@ -326,7 +493,9 @@ func (w *watchTargetsRuntime) tryStart(targetID string, now time.Time, interval 
 	defer w.mu.Unlock()
 	st, ok := w.statuses[targetID]
 	if !ok {
-		st = &watchTargetStatus{}
+		st = &watchTargetStatus{
+			GuildStates: make(map[string]*NotificationState),
+		}
 		w.statuses[targetID] = st
 	}
 	if st.Running {
@@ -351,24 +520,48 @@ func (w *watchTargetsRuntime) finish(targetID string) {
 	}
 }
 
-func (w *watchTargetsRuntime) updateDiffStatus(targetID string, hasDiff bool) (changed bool, lastKnown bool) {
+func (w *watchTargetsRuntime) evaluateAndUpdateGuild(targetID, guildID string, diffValue, threshold float64) watchTargetEval {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	st, ok := w.statuses[targetID]
 	if !ok {
-		st = &watchTargetStatus{}
+		st = &watchTargetStatus{
+			GuildStates: make(map[string]*NotificationState),
+		}
 		w.statuses[targetID] = st
 	}
-	if st.LastHasDiff == nil {
-		st.LastHasDiff = &hasDiff
-		return hasDiff, false
+	if st.GuildStates == nil {
+		st.GuildStates = make(map[string]*NotificationState)
 	}
-	prev := *st.LastHasDiff
-	if prev == hasDiff {
-		return false, prev
+	gs, ok := st.GuildStates[guildID]
+	if !ok {
+		gs = &NotificationState{
+			LastTier:         TierNone,
+			MentionTriggered: false,
+			WasZeroDiff:      true,
+		}
+		st.GuildStates[guildID] = gs
 	}
-	*st.LastHasDiff = hasDiff
-	return true, true
+
+	currentTier := calculateTier(diffValue, threshold)
+	isZero := isZeroDiff(diffValue)
+	ev := watchTargetEval{
+		sendRecover:  gs.WasZeroDiff && !isZero,
+		sendComplete: !gs.WasZeroDiff && isZero,
+		tier:         currentTier,
+	}
+	if currentTier != gs.LastTier {
+		if currentTier > gs.LastTier {
+			ev.sendIncrease = true
+		} else {
+			ev.sendDecrease = true
+		}
+	}
+
+	gs.LastTier = currentTier
+	gs.WasZeroDiff = isZero
+	return ev
 }
 
 func (w *watchTargetsRuntime) shouldNotifyError(targetID string) bool {

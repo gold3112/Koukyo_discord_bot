@@ -221,6 +221,7 @@ func (n *Notifier) sendNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendMainMonitorMapField(embed)
 
 	// 画像を取得して結合
 	var files []*discordgo.File
@@ -325,6 +326,7 @@ func (n *Notifier) sendDecreaseNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendMainMonitorMapField(embed)
 
 	// 画像を取得して結合
 	var files []*discordgo.File
@@ -424,6 +426,7 @@ func (n *Notifier) sendZeroRecoveryNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendMainMonitorMapField(embed)
 
 	// 画像を取得して結合
 	var files []*discordgo.File
@@ -513,6 +516,7 @@ func (n *Notifier) sendZeroCompletionNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendMainMonitorMapField(embed)
 
 	// 画像を取得して結合
 	var files []*discordgo.File
