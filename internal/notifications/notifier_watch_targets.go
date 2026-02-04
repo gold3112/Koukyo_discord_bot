@@ -198,13 +198,14 @@ func (n *Notifier) buildWatchTargetResult(target watchTargetConfig) (*watchTarge
 	if err != nil {
 		return nil, fmt.Errorf("combine failed: %w", err)
 	}
+	maskedLive := applyTemplateAlphaMask(template, liveImg)
 
 	diffPixels, diffMask := buildDiffMask(template, liveImg)
 	percent := 0.0
 	if template.OpaqueCount > 0 {
 		percent = float64(diffPixels) * 100 / float64(template.OpaqueCount)
 	}
-	livePNG, err := encodePNG(liveImg)
+	livePNG, err := encodePNG(maskedLive)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +230,28 @@ func (n *Notifier) buildWatchTargetResult(target watchTargetConfig) (*watchTarge
 		diffPNG:    diffPNG,
 		mergedPNG:  mergedPNG,
 	}, nil
+}
+
+func applyTemplateAlphaMask(template *watchTemplate, live *image.NRGBA) *image.NRGBA {
+	out := image.NewNRGBA(live.Bounds())
+	if template == nil || template.Img == nil || live == nil {
+		return out
+	}
+	for y := 0; y < template.Height; y++ {
+		for x := 0; x < template.Width; x++ {
+			ti := y*template.Img.Stride + x*4
+			if template.Img.Pix[ti+3] == 0 {
+				continue
+			}
+			li := y*live.Stride + x*4
+			oi := y*out.Stride + x*4
+			out.Pix[oi] = live.Pix[li]
+			out.Pix[oi+1] = live.Pix[li+1]
+			out.Pix[oi+2] = live.Pix[li+2]
+			out.Pix[oi+3] = 255
+		}
+	}
+	return out
 }
 
 func buildDiffMask(template *watchTemplate, live *image.NRGBA) (int, *image.NRGBA) {
