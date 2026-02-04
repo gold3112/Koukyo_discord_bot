@@ -8,8 +8,11 @@ const (
 	// Assumed viewport for shared links (desktop-first).
 	defaultViewportWidth  = 1280.0
 	defaultViewportHeight = 720.0
-	// Keep some margin so the region is visible with breathing room.
-	defaultViewportPadding = 0.90
+	// Wplace UI reduces effective visible map area from raw viewport.
+	uiWidthFactor  = 0.82
+	uiHeightFactor = 0.90
+	// Calibrates Wplace zoom behavior against desktop observations.
+	zoomBias = -0.43
 	// Wplace visibility floor (tiles can disappear below this).
 	minSafeZoom = 10.7
 	maxSafeZoom = 22.0
@@ -29,15 +32,15 @@ func ZoomFromImageSize(width, height int) float64 {
 		return minSafeZoom
 	}
 
-	usableW := defaultViewportWidth * defaultViewportPadding
-	usableH := defaultViewportHeight * defaultViewportPadding
+	usableW := defaultViewportWidth * uiWidthFactor
+	usableH := defaultViewportHeight * uiHeightFactor
 	if usableW <= 0 || usableH <= 0 {
 		return minSafeZoom
 	}
 
 	zoomW := math.Log2(usableW / (webMercatorTileSize * fracW))
 	zoomH := math.Log2(usableH / (webMercatorTileSize * fracH))
-	zoom := math.Min(zoomW, zoomH)
+	zoom := math.Min(zoomW, zoomH) + zoomBias
 
 	if math.IsNaN(zoom) || math.IsInf(zoom, 0) {
 		return minSafeZoom

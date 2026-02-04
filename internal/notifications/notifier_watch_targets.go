@@ -19,6 +19,7 @@ import (
 	"Koukyo_discord_bot/internal/wplace"
 
 	"github.com/bwmarrin/discordgo"
+	_ "golang.org/x/image/webp"
 )
 
 const (
