@@ -133,6 +133,26 @@ func (n *Notifier) startWatchTargetsLoop() {
 	}()
 }
 
+// HandleWatchTargetManual triggers a one-off fetch for a target id and posts to the channel.
+func (n *Notifier) HandleWatchTargetManual(channelID, targetID string) bool {
+	if n == nil || n.watchTargetsState == nil {
+		return false
+	}
+	target, ok := n.watchTargetsState.findTargetByID(targetID)
+	if !ok {
+		return false
+	}
+	go func() {
+		result, err := n.buildWatchTargetResult(target)
+		if err != nil {
+			_, _ = n.session.ChannelMessageSend(channelID, fmt.Sprintf("❌ 追加監視の取得に失敗しました: %v", err))
+			return
+		}
+		n.sendWatchTargetManual(channelID, target, result)
+	}()
+	return true
+}
+
 func (n *Notifier) runWatchTarget(target watchTargetConfig) {
 	result, err := n.buildWatchTargetResult(target)
 	if err != nil {
@@ -383,6 +403,11 @@ func (n *Notifier) buildWatchTargetEmbed(title string, target watchTargetConfig,
 		Color:       colorCode,
 		Fields: []*discordgo.MessageEmbedField{
 			{
+				Name:   "ID",
+				Value:  fmt.Sprintf("`%s`", target.ID),
+				Inline: true,
+			},
+			{
 				Name:   "差分率",
 				Value:  fmt.Sprintf("%.2f%%", result.percent),
 				Inline: true,
@@ -408,6 +433,11 @@ func (n *Notifier) buildWatchTargetEmbed(title string, target watchTargetConfig,
 				Inline: true,
 			},
 			{
+				Name:   "手動取得",
+				Value:  fmt.Sprintf("`!%s`", target.ID),
+				Inline: true,
+			},
+			{
 				Name:   "Wplace.live",
 				Value:  fmt.Sprintf("[地図で見る](%s)\n`/get fullsize:%s`", result.wplaceURL, result.fullsize),
 				Inline: false,
@@ -419,6 +449,12 @@ func (n *Notifier) buildWatchTargetEmbed(title string, target watchTargetConfig,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 	return embed
+}
+
+func (n *Notifier) sendWatchTargetManual(channelID string, target watchTargetConfig, result *watchTargetResult) {
+	content := fmt.Sprintf("📌 追加監視 手動取得: `%s`", target.Label)
+	embed := n.buildWatchTargetEmbed("📌 追加監視 手動取得", target, result, 0x3498DB)
+	n.sendWatchTargetMessage(channelID, content, embed, target, result)
 }
 
 func (n *Notifier) sendWatchTargetMessage(
@@ -509,6 +545,20 @@ func (w *watchTargetsRuntime) loadConfigs() ([]watchTargetConfig, error) {
 	w.configs = cfgs
 	w.configsLoaded = time.Now()
 	return append([]watchTargetConfig(nil), w.configs...), nil
+}
+
+func (w *watchTargetsRuntime) findTargetByID(targetID string) (watchTargetConfig, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.configs == nil {
+		return watchTargetConfig{}, false
+	}
+	for _, cfg := range w.configs {
+		if cfg.ID == targetID {
+			return cfg, true
+		}
+	}
+	return watchTargetConfig{}, false
 }
 
 func (w *watchTargetsRuntime) tryStart(targetID string, now time.Time, interval time.Duration) bool {

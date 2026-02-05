@@ -37,6 +37,9 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// コマンド実行
 	cmd, exists := h.registry.Get(cmdName)
 	if !exists {
+		if h.handleWatchTargetManual(s, m, cmdName) {
+			return
+		}
 		if h.handleGetShortcut(s, m, cmdName) {
 			return
 		}
