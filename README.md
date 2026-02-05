@@ -49,6 +49,7 @@ go run ./cmd/bot
 - ユーザー活動の追跡/可視化（荒らし/修復のスコア・履歴）
 - 画像生成（/now の結合画像、グラフ/ヒートマップ/タイムラプス）
 - 地図/タイル取得ユーティリティ（`/get`、`/regionmap`）
+- 追加監視（`watch_targets.json`）と進捗監視（`progress_targets.json`）
 - 外部 API 向けのレートリミッター
 
 ## コマンド一覧
@@ -63,6 +64,7 @@ go run ./cmd/bot
 - `heatmap` - 最近の変化量ヒートマップ
 - `settings` - 通知/閾値などの設定パネル（管理者向け）
 - `notification` - 荒らし/修復ユーザー通知チャンネル設定（管理者向け）
+- `progresschannel` - ピクセルアート進捗通知チャンネル設定（管理者向け）
 - `status` - Bot 自体の稼働状況（メモリ、稼働時間など）
 
 ### ユーザー活動
@@ -85,6 +87,34 @@ go run ./cmd/bot
 
 ※ `graph` / `timelapse` / `heatmap` は WebSocket 監視が有効なときのみ利用できます。
 
+## 追加監視 / 進捗監視
+
+### 追加監視（荒らし検知）
+- 設定: `data/watch_targets.json`
+- 画像: `data/template_img/`
+- 手動取得: `!{id}`
+
+### 進捗監視（制作向け）
+- 設定: `data/progress_targets.json`
+- 画像: `data/template_img/`
+- チャンネル設定: `/progresschannel act:on`
+- 手動取得: `!{id}`
+
+JSON 形式は共通です:
+```json
+{
+  "targets": [
+    {
+      "id": "koukyo-main",
+      "label": "Koukyo Main",
+      "origin": "1818-806-989-358",
+      "template": "koukyo_main.png",
+      "interval_seconds": 30
+    }
+  ]
+}
+```
+
 ## 設定
 
 必須/任意の環境変数:
@@ -101,6 +131,7 @@ go run ./cmd/bot
 - `data/vandal_daily.json`
 - `data/achievements.json`
 - `data/watch_targets.json` (追加監視ターゲット定義)
+- `data/progress_targets.json` (進捗監視ターゲット定義)
 - `data/template_img/` (監視用テンプレート画像)
 
 ## Discord 側の設定
@@ -140,6 +171,12 @@ docker compose up --build
 
 - 通知が来ない  
   -> `/settings` で通知チャンネルを設定し、`auto_notify` が有効か確認してください。
+  -> 進捗通知は `/progresschannel act:on` が必要です。
+
+## GitHub 用メモ
+
+- 設定ファイルは `data/` に置きます（Docker では `/app/data`）
+- `data/template_img/` 配下は監視テンプレ画像を保存します
 
 ## 移植元
 

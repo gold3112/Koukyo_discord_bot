@@ -44,7 +44,8 @@ func init() {
 }
 
 func DownloadTile(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY int) ([]byte, error) {
-	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png", tileX, tileY)
+	cacheBust := time.Now().UnixNano() % 10000000
+	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png?t=%d", tileX, tileY, cacheBust)
 	cacheKey := fmt.Sprintf("%d-%d", tileX, tileY)
 	if data, ok := getTileFromCache(cacheKey); ok {
 		return data, nil
