@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	"image/color"
-	"image/png"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,7 +15,6 @@ import (
 	"time"
 
 	"Koukyo_discord_bot/internal/config"
-	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/utils"
 	"Koukyo_discord_bot/internal/wplace"
 
@@ -218,9 +214,9 @@ func (n *Notifier) buildWatchTargetResult(target watchTargetConfig) (*watchTarge
 	if err != nil {
 		return nil, fmt.Errorf("combine failed: %w", err)
 	}
-	maskedLive := applyTemplateAlphaMask(template, liveImg)
+	maskedLive := applyTemplateAlphaMask(template.Img, liveImg)
 
-	diffPixels, diffMask := buildDiffMask(template, liveImg)
+	diffPixels, diffMask := buildDiffMask(template.Img, liveImg)
 	percent := 0.0
 	if template.OpaqueCount > 0 {
 		percent = float64(diffPixels) * 100 / float64(template.OpaqueCount)
@@ -252,85 +248,6 @@ func (n *Notifier) buildWatchTargetResult(target watchTargetConfig) (*watchTarge
 	}, nil
 }
 
-func applyTemplateAlphaMask(template *watchTemplate, live *image.NRGBA) *image.NRGBA {
-	out := image.NewNRGBA(live.Bounds())
-	if template == nil || template.Img == nil || live == nil {
-		return out
-	}
-	for y := 0; y < template.Height; y++ {
-		for x := 0; x < template.Width; x++ {
-			ti := y*template.Img.Stride + x*4
-			if template.Img.Pix[ti+3] == 0 {
-				continue
-			}
-			li := y*live.Stride + x*4
-			oi := y*out.Stride + x*4
-			out.Pix[oi] = live.Pix[li]
-			out.Pix[oi+1] = live.Pix[li+1]
-			out.Pix[oi+2] = live.Pix[li+2]
-			out.Pix[oi+3] = 255
-		}
-	}
-	return out
-}
-
-func buildDiffMask(template *watchTemplate, live *image.NRGBA) (int, *image.NRGBA) {
-	mask := image.NewNRGBA(image.Rect(0, 0, template.Width, template.Height))
-	if template == nil || template.Img == nil || live == nil {
-		return 0, mask
-	}
-	bounds := template.Img.Bounds()
-	if live.Bounds().Dx() != bounds.Dx() || live.Bounds().Dy() != bounds.Dy() {
-		fillOpaqueMask(mask, template)
-		return template.OpaqueCount, mask
-	}
-	diff := 0
-	diffColor := color.NRGBA{R: 255, G: 0, B: 0, A: 255}
-	for y := 0; y < bounds.Dy(); y++ {
-		for x := 0; x < bounds.Dx(); x++ {
-			ti := y*template.Img.Stride + x*4
-			if template.Img.Pix[ti+3] == 0 {
-				continue
-			}
-			li := y*live.Stride + x*4
-			if template.Img.Pix[ti] != live.Pix[li] ||
-				template.Img.Pix[ti+1] != live.Pix[li+1] ||
-				template.Img.Pix[ti+2] != live.Pix[li+2] {
-				mask.SetNRGBA(x, y, diffColor)
-				diff++
-			}
-		}
-	}
-	return diff, mask
-}
-
-func fillOpaqueMask(mask *image.NRGBA, template *watchTemplate) {
-	diffColor := color.NRGBA{R: 255, G: 0, B: 0, A: 255}
-	for y := 0; y < template.Height; y++ {
-		for x := 0; x < template.Width; x++ {
-			idx := y*template.Img.Stride + x*4 + 3
-			if template.Img.Pix[idx] != 0 {
-				mask.SetNRGBA(x, y, diffColor)
-			}
-		}
-	}
-}
-
-func encodePNG(img image.Image) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func buildCombinedPreview(livePNG, diffPNG []byte) ([]byte, error) {
-	mergedReader, err := embeds.CombineImages(livePNG, diffPNG)
-	if err != nil {
-		return nil, err
-	}
-	return io.ReadAll(mergedReader)
-}
 
 func (n *Notifier) sendWatchTargetIncreaseNotification(
 	channelID string,
@@ -345,6 +262,16 @@ func (n *Notifier) sendWatchTargetIncreaseNotification(
 	}
 	tierDesc := "変動"
 	switch tier {
+	case Tier100:
+		tierDesc = "100%に急増!!"
+	case Tier90:
+		tierDesc = "90%台に増加"
+	case Tier80:
+		tierDesc = "80%台に増加"
+	case Tier70:
+		tierDesc = "70%台に増加"
+	case Tier60:
+		tierDesc = "60%台に増加"
 	case Tier50:
 		tierDesc = "50%以上に急増"
 	case Tier40:
@@ -841,15 +768,4 @@ func resolveTemplatePath(dataDir, ref string) (string, error) {
 		return "", fmt.Errorf("template path is outside template_img: %s", ref)
 	}
 	return full, nil
-}
-
-func toNRGBAImage(src image.Image) *image.NRGBA {
-	b := src.Bounds()
-	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	for y := 0; y < b.Dy(); y++ {
-		for x := 0; x < b.Dx(); x++ {
-			dst.Set(x, y, src.At(b.Min.X+x, b.Min.Y+y))
-		}
-	}
-	return dst
 }

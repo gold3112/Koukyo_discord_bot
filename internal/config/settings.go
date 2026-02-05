@@ -14,7 +14,9 @@ type GuildSettings struct {
 	NotificationVandalChannel *string `json:"notification_vandal_channel,omitempty"` // 荒らしユーザー通知チャンネル
 	NotificationFixChannel    *string `json:"notification_fix_channel,omitempty"`    // 修復ユーザー通知チャンネル
 	AchievementChannel        *string `json:"achievement_channel,omitempty"`         // 実績通知チャンネル
+	ProgressChannel           *string `json:"progress_channel,omitempty"`            // 進捗通知チャンネル
 	AutoNotifyEnabled         bool    `json:"auto_notify_enabled"`                   // 自動通知ON/OFF
+	ProgressNotifyEnabled     bool    `json:"progress_notify_enabled"`               // 進捗通知ON/OFF
 	NotificationThreshold     float64 `json:"notification_threshold"`                // 通知閾値（%）
 	MentionRole               *string `json:"mention_role,omitempty"`                // メンションロールID
 	MentionThreshold          float64 `json:"mention_threshold"`                     // メンション閾値（%）
@@ -24,6 +26,7 @@ type GuildSettings struct {
 // DefaultGuildSettings デフォルト設定
 var DefaultGuildSettings = GuildSettings{
 	AutoNotifyEnabled:     true,
+	ProgressNotifyEnabled: false,
 	NotificationThreshold: 10.0,
 	MentionThreshold:      50.0,
 	NotificationMetric:    "overall",

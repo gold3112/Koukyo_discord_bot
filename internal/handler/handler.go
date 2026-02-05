@@ -42,6 +42,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		commands.NewAchievementsCommand(dataDir),
 		commands.NewSettingsCommand(settingsManager, notifier), // settingsManager を渡す
 		commands.NewNotificationCommand(settingsManager),
+		commands.NewProgressChannelCommand(settingsManager),
 		commands.NewAchievementChannelCommand(settingsManager),
 		commands.NewGetCommand(limiter), // limiter を渡すように変更
 		commands.NewPaintCommand(),

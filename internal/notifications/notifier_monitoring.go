@@ -15,6 +15,7 @@ import (
 func (n *Notifier) StartMonitoring() {
 	n.startDailyRankingLoop()
 	n.startWatchTargetsLoop()
+	n.startProgressTargetsLoop()
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()

@@ -34,19 +34,21 @@ type Notifier struct {
 	vandalUserNotifier       *VandalUserNotifier
 	fixUserNotifier          *FixUserNotifier
 	watchTargetsState        *watchTargetsRuntime
+	progressTargetsState     *progressTargetsRuntime
 }
 
 // NewNotifier 通知システムを作成
 func NewNotifier(session *discordgo.Session, mon *monitor.Monitor, settings *config.SettingsManager, dataDir string) *Notifier {
 	return &Notifier{
-		session:            session,
-		monitor:            mon,
-		settings:           settings,
-		states:             make(map[string]*NotificationState),
-		dataDir:            dataDir,
-		vandalUserNotifier: NewVandalUserNotifier(session, settings),
-		fixUserNotifier:    NewFixUserNotifier(session, settings),
-		watchTargetsState:  newWatchTargetsRuntime(dataDir),
+		session:              session,
+		monitor:              mon,
+		settings:             settings,
+		states:               make(map[string]*NotificationState),
+		dataDir:              dataDir,
+		vandalUserNotifier:   NewVandalUserNotifier(session, settings),
+		fixUserNotifier:      NewFixUserNotifier(session, settings),
+		watchTargetsState:    newWatchTargetsRuntime(dataDir),
+		progressTargetsState: newProgressTargetsRuntime(dataDir),
 	}
 }
 
@@ -151,6 +153,16 @@ func (n *Notifier) sendNotification(
 	// Tier に応じた通知メッセージを構築
 	var tierDesc string
 	switch tier {
+	case Tier100:
+		tierDesc = "100%に急増!!"
+	case Tier90:
+		tierDesc = "90%台に増加"
+	case Tier80:
+		tierDesc = "80%台に増加"
+	case Tier70:
+		tierDesc = "70%台に増加"
+	case Tier60:
+		tierDesc = "60%台に増加"
 	case Tier50:
 		tierDesc = "50%以上に急増"
 	case Tier40:
