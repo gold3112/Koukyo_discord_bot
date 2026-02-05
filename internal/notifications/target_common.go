@@ -208,7 +208,7 @@ func buildTargetResult(coord *utils.Coordinate, template *watchTemplate) (*targe
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	tilesData, err := wplace.DownloadTilesGrid(ctx, nil, startTileX, startTileY, tilesX, tilesY, 16)
+	tilesData, err := wplace.DownloadTilesGridNoCache(ctx, nil, startTileX, startTileY, tilesX, tilesY, 16)
 	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("download failed: %w", err)

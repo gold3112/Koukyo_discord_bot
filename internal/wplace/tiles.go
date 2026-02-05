@@ -44,11 +44,21 @@ func init() {
 }
 
 func DownloadTile(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY int) ([]byte, error) {
+	return downloadTile(ctx, limiter, tileX, tileY, true)
+}
+
+func DownloadTileNoCache(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY int) ([]byte, error) {
+	return downloadTile(ctx, limiter, tileX, tileY, false)
+}
+
+func downloadTile(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY int, useCache bool) ([]byte, error) {
 	cacheBust := time.Now().UnixNano() % 10000000
 	url := fmt.Sprintf("https://backend.wplace.live/files/s0/tiles/%d/%d.png?t=%d", tileX, tileY, cacheBust)
 	cacheKey := fmt.Sprintf("%d-%d", tileX, tileY)
-	if data, ok := getTileFromCache(cacheKey); ok {
-		return data, nil
+	if useCache {
+		if data, ok := getTileFromCache(cacheKey); ok {
+			return data, nil
+		}
 	}
 
 	doReq := func() (interface{}, error) {
@@ -83,7 +93,7 @@ func DownloadTile(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY 
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for tile %d-%d", tileX, tileY)
 	}
-	if len(data) > 0 {
+	if useCache && len(data) > 0 {
 		storeTileCache(cacheKey, data)
 	}
 	return data, nil
@@ -93,6 +103,23 @@ func DownloadTilesGrid(
 	ctx context.Context,
 	limiter *utils.RateLimiter,
 	minX, minY, cols, rows, maxConcurrent int,
+) ([][]byte, error) {
+	return downloadTilesGrid(ctx, limiter, minX, minY, cols, rows, maxConcurrent, true)
+}
+
+func DownloadTilesGridNoCache(
+	ctx context.Context,
+	limiter *utils.RateLimiter,
+	minX, minY, cols, rows, maxConcurrent int,
+) ([][]byte, error) {
+	return downloadTilesGrid(ctx, limiter, minX, minY, cols, rows, maxConcurrent, false)
+}
+
+func downloadTilesGrid(
+	ctx context.Context,
+	limiter *utils.RateLimiter,
+	minX, minY, cols, rows, maxConcurrent int,
+	useCache bool,
 ) ([][]byte, error) {
 	if cols <= 0 || rows <= 0 {
 		return nil, fmt.Errorf("invalid grid size: %dx%d", cols, rows)
@@ -124,7 +151,13 @@ func DownloadTilesGrid(
 					return
 				}
 				reqCtx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
-				data, err := DownloadTile(reqCtx, limiter, ix, iy)
+				var data []byte
+				var err error
+				if useCache {
+					data, err = DownloadTile(reqCtx, limiter, ix, iy)
+				} else {
+					data, err = DownloadTileNoCache(reqCtx, limiter, ix, iy)
+				}
 				cancelReq()
 				if err != nil {
 					mu.Lock()
