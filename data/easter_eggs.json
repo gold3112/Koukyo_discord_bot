@@ -133,6 +133,19 @@
         ],
         "reply": "SyBと同じにするな、無礼者め。"
     },
+    "gori": {
+        "aliases": [
+            "gori",
+            "Gori",
+            "GORI",
+            "ごり",
+            "ゴリ"
+        ],
+        "choices": [
+            { "reply": "https://gold3112.online/for-bot/gori-boom.gif", "weight": 0.1 },
+            { "reply": "人間定期", "weight": 0.9 }
+        ]
+    },
     "s.bm": "-# ???「(´-`).｡oO(貴方たちの生死は私にかかっています...。)」",
     "工口":"工口あるよ(笑)",
     "gin": "ginさんLOVE(発作)",
