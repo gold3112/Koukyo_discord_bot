@@ -50,10 +50,13 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 	userID := ""
 	discordID := ""
 	discordName := ""
+	userName := ""
 	for _, opt := range i.ApplicationCommandData().Options {
 		switch opt.Name {
 		case "id":
 			userID = strings.TrimSpace(opt.StringValue())
+		case "name":
+			userName = strings.TrimSpace(opt.StringValue())
 		case "discord_id":
 			discordID = strings.TrimSpace(opt.StringValue())
 		case "discord":
@@ -86,6 +89,34 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 			Data: &discordgo.InteractionResponseData{
 				Embeds: []*discordgo.MessageEmbed{embed},
 				Files:  buildOptionalFiles(file),
+			},
+		})
+	}
+
+	if userName != "" {
+		matches, err := loadUserActivityByName(c.dataDir, userName)
+		if err != nil {
+			return respondUserListError(s, i, err)
+		}
+		if len(matches) == 0 {
+			return respondUserListError(s, i, fmt.Errorf("該当ユーザーが見つかりません"))
+		}
+		if len(matches) == 1 {
+			embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(matches[0], kind), listType, matches[0])
+			return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Embeds: []*discordgo.MessageEmbed{embed},
+					Files:  buildOptionalFiles(file),
+				},
+			})
+		}
+		embed, components := buildUserActivitySearchEmbed(userName, matches)
+		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds:     []*discordgo.MessageEmbed{embed},
+				Components: components,
 			},
 		})
 	}
@@ -155,6 +186,12 @@ func (c *UserActivityCommand) SlashDefinition() *discordgo.ApplicationCommand {
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "id",
 				Description: "ゲーム内ID",
+				Required:    false,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "name",
+				Description: "ゲーム内ユーザー名 (部分一致)",
 				Required:    false,
 			},
 			{
@@ -470,6 +507,50 @@ func loadUserActivityByDiscordName(dataDir, query string) ([]userActivityEntry, 
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].Score == matches[j].Score {
 			return matches[i].Discord < matches[j].Discord
+		}
+		return matches[i].Score > matches[j].Score
+	})
+	return matches, nil
+}
+
+func loadUserActivityByName(dataDir, query string) ([]userActivityEntry, error) {
+	path := filepath.Join(dataDir, "user_activity.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]*activity.UserActivity
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	if queryLower == "" {
+		return nil, nil
+	}
+	matches := make([]userActivityEntry, 0)
+	for id, entry := range raw {
+		if entry.Name == "" {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(entry.Name), queryLower) {
+			continue
+		}
+		matches = append(matches, userActivityEntry{
+			ID:            id,
+			Name:          entry.Name,
+			Alliance:      entry.AllianceName,
+			Discord:       entry.Discord,
+			DiscordID:     entry.DiscordID,
+			Picture:       entry.Picture,
+			VandalCount:   entry.VandalCount,
+			RestoredCount: entry.RestoredCount,
+			Score:         activityScore(entry.RestoredCount, entry.VandalCount),
+			LastSeen:      parseUserListTime(entry.LastSeen),
+		})
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Score == matches[j].Score {
+			return matches[i].Name < matches[j].Name
 		}
 		return matches[i].Score > matches[j].Score
 	})
