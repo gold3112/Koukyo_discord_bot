@@ -7,5 +7,37 @@
       "rosenzu_map",
       "路線図"
     ]
+  },
+  "takanashi-rikka": {
+    "fullsize": "1798-811-673-63-1798-811-985-422",
+    "label": "小鳥遊六花",
+    "aliases": [
+      "takanashi-rikka",
+      "小鳥遊六花",
+      "takanashirikka",
+      "takanasirikka",
+      "rikka"
+    ]
+  },
+  "takeshima": {
+    "fullsize": "1774-795-40-100-1774-795-400-360",
+    "label": "竹島",
+    "aliases": [
+      "takeshima",
+      "竹島"
+    ]
+  },
+  "blue-screen": {
+    "fullsize": "1826-795-65-501-1819-794-155-598",
+    "label": "ブルースクリーン",
+    "aliases": [
+      "burusuku",
+      "ブルスク",
+      "blue-screen",
+      "ブルースクリーン",
+      "bsod",
+      "Blue-Screen-of-Death",
+      "BSOD"
+    ]
   }
 }
