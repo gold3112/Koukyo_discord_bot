@@ -118,7 +118,7 @@ func (c *GetCommand) buildFullsizeResult(fullsize, label string) ([]byte, string
 	tilesX := (endPixelX + utils.WplaceTileSize - 1) / utils.WplaceTileSize
 	tilesY := (endPixelY + utils.WplaceTileSize - 1) / utils.WplaceTileSize
 	totalTiles := tilesX * tilesY
-	if totalTiles > 10 {
+	if totalTiles > 16 {
 		return nil, "", nil, fmt.Errorf("サイズが大きすぎます: %dタイル (%dx%d)", totalTiles, tilesX, tilesY)
 	}
 	if startTileX < 0 || startTileY < 0 || startTileX+tilesX-1 >= utils.WplaceTilesPerEdge || startTileY+tilesY-1 >= utils.WplaceTilesPerEdge {
