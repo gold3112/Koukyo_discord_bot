@@ -21,7 +21,7 @@ type NotificationState struct {
 	// Small-diff thread for suppressing noisy notifications when only a few pixels changed.
 	SmallDiffMessageID        string
 	SmallDiffMessageChannelID string
-	SmallDiffThreadUsed       bool
+	SmallDiffActive           bool
 }
 
 // Notifier 通知システム
@@ -103,6 +103,98 @@ func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationS
 	state.SmallDiffMessageChannelID = channelID
 }
 
+func (n *Notifier) sendSmallDiffEscalationNotification(
+	guildID string,
+	settings config.GuildSettings,
+	data *monitor.MonitorData,
+	diffValue float64,
+	tier Tier,
+	metricLabel string,
+) {
+	channelID := *settings.NotificationChannel
+	mentionStr := ""
+	if diffValue >= settings.MentionThreshold && settings.MentionRole != nil {
+		mentionStr = fmt.Sprintf("<@&%s> ", *settings.MentionRole)
+	}
+	message := fmt.Sprintf(
+		"%s【Wplace速報】 🚨 差分ピクセルが増加しました。[現在%.2f%%] (%d/%d px)",
+		mentionStr,
+		diffValue,
+		data.DiffPixels,
+		data.TotalPixels,
+	)
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "🏯 Wplace 荒らし検知",
+		Description: fmt.Sprintf("小規模変化(<=%dpx)から増加しました\n現在の%s: **%.2f%%**", smallDiffPixelLimit, metricLabel, diffValue),
+		Color:       getTierColor(tier),
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "📊 差分率 (全体)",
+				Value:  fmt.Sprintf("%.2f%%", data.DiffPercentage),
+				Inline: true,
+			},
+			{
+				Name:   "📈 差分ピクセル (全体)",
+				Value:  fmt.Sprintf("%d / %d", data.DiffPixels, data.TotalPixels),
+				Inline: true,
+			},
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "自動通知システム",
+		},
+	}
+
+	if data.WeightedDiffPercentage != nil {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "🔍 加重差分率 (菊重視)",
+			Value:  fmt.Sprintf("%.2f%%", *data.WeightedDiffPercentage),
+			Inline: true,
+		})
+	}
+	if data.ChrysanthemumDiffPixels > 0 || data.BackgroundDiffPixels > 0 {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "🔍 差分ピクセル (菊/背景)",
+			Value:  fmt.Sprintf("菊 %d / %d | 背景 %d / %d", data.ChrysanthemumDiffPixels, data.ChrysanthemumTotalPixels, data.BackgroundDiffPixels, data.BackgroundTotalPixels),
+			Inline: false,
+		})
+	}
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "📐 監視ピクセル数",
+		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
+		Inline: false,
+	})
+	appendMainMonitorMapField(embed)
+
+	// 画像を取得して結合
+	var files []*discordgo.File
+	images := n.monitor.GetLatestImages()
+	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
+		combinedImage, err := embeds.CombineImages(images.LiveImage, images.DiffImage)
+		if err == nil {
+			files = append(files, &discordgo.File{
+				Name:        "koukyo_status.png",
+				ContentType: "image/png",
+				Reader:      combinedImage,
+			})
+			embed.Image = &discordgo.MessageEmbedImage{
+				URL: "attachment://koukyo_status.png",
+			}
+		} else {
+			log.Printf("Failed to combine images for escalation notification: %v", err)
+		}
+	}
+
+	if _, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content: message,
+		Embeds:  []*discordgo.MessageEmbed{embed},
+		Files:   files,
+	}); err != nil {
+		log.Printf("Failed to send escalation notification to guild %s: %v", guildID, err)
+	}
+}
+
 // CheckAndNotify 差分率をチェックして通知を送信
 func (n *Notifier) CheckAndNotify(guildID string) {
 	settings := n.settings.GetGuildSettings(guildID)
@@ -150,11 +242,27 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 			data.TotalPixels,
 		)
 		n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
-		state.SmallDiffThreadUsed = true
+		state.SmallDiffActive = true
 		state.LastTier = currentTier
 		state.MentionTriggered = diffValue >= settings.MentionThreshold
 		state.WasZeroDiff = isZero
 		return
+	}
+
+	// Escalation: we were in small-diff mode but the diff grew beyond the limit.
+	// Ensure the previously posted small-diff message doesn't become stale, then
+	// fall back to the normal notification flow (optionally forcing a message).
+	if !isZero && state.SmallDiffActive && data.DiffPixels > smallDiffPixelLimit {
+		switchMsg := fmt.Sprintf("⚠️ 差分ピクセルが増加したため通常通知に切り替えます (%d/%d px)", data.DiffPixels, data.TotalPixels)
+		n.upsertSmallDiffMessage(*settings.NotificationChannel, state, switchMsg)
+		state.SmallDiffActive = false
+
+		// If this won't trigger a normal tier-increase notification (e.g. still below % threshold),
+		// force one so the "11px以上は通常" expectation is met.
+		willSendIncrease := currentTier != state.LastTier && currentTier > state.LastTier
+		if !willSendIncrease {
+			n.sendSmallDiffEscalationNotification(guildID, settings, data, diffValue, currentTier, metricLabel)
+		}
 	}
 
 	// 0%から変動した場合の通知（省電力モード解除）
@@ -164,7 +272,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 
 	// 0%に戻った場合の通知（修復完了）
 	if !state.WasZeroDiff && isZero {
-		if state.SmallDiffThreadUsed {
+		if state.SmallDiffActive {
 			content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ %s: 0.00%% # Pixel Perfect!", metricLabel)
 			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
 			// Suppress tier/decrease spam for the small-diff thread.
@@ -187,9 +295,8 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	}
 
 	// 状態を更新
-	if data.DiffPixels > smallDiffPixelLimit {
-		// A "real" event happened; do not hijack the next completion with small-diff editing.
-		state.SmallDiffThreadUsed = false
+	if isZero {
+		state.SmallDiffActive = false
 	}
 	state.LastTier = currentTier
 	state.MentionTriggered = diffValue >= settings.MentionThreshold
