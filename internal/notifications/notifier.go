@@ -18,6 +18,10 @@ type NotificationState struct {
 	LastTier         Tier
 	MentionTriggered bool
 	WasZeroDiff      bool // 前回が0%だったか
+	// Small-diff thread for suppressing noisy notifications when only a few pixels changed.
+	SmallDiffMessageID        string
+	SmallDiffMessageChannelID string
+	SmallDiffThreadUsed       bool
 }
 
 // Notifier 通知システム
@@ -70,6 +74,35 @@ func (n *Notifier) getState(guildID string) *NotificationState {
 	return state
 }
 
+const smallDiffPixelLimit = 10
+
+func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationState, content string) {
+	if n == nil || n.session == nil || state == nil || channelID == "" {
+		return
+	}
+	// Try edit first (preferred: keep one message and update it).
+	if state.SmallDiffMessageID != "" && state.SmallDiffMessageChannelID != "" {
+		// If the notification channel changed, we cannot edit the old message in the new channel.
+		editChannelID := state.SmallDiffMessageChannelID
+		if editChannelID != channelID {
+			editChannelID = ""
+		}
+		if editChannelID != "" {
+			if _, err := n.session.ChannelMessageEdit(editChannelID, state.SmallDiffMessageID, content); err == nil {
+				return
+			}
+		}
+	}
+
+	msg, err := n.session.ChannelMessageSend(channelID, content)
+	if err != nil {
+		log.Printf("Failed to send small-diff notification to channel %s: %v", channelID, err)
+		return
+	}
+	state.SmallDiffMessageID = msg.ID
+	state.SmallDiffMessageChannelID = channelID
+}
+
 // CheckAndNotify 差分率をチェックして通知を送信
 func (n *Notifier) CheckAndNotify(guildID string) {
 	settings := n.settings.GetGuildSettings(guildID)
@@ -102,6 +135,28 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	currentTier := calculateTier(diffValue, settings.NotificationThreshold)
 	state := n.getState(guildID)
 
+	// Suppress noisy notifications when only a few pixels changed.
+	// For <=10px changes we keep a single text message and edit it as the state changes.
+	metricLabel := "差分率"
+	if settings.NotificationMetric == "weighted" {
+		metricLabel = "加重差分率"
+	}
+	if data.DiffPixels > 0 && data.DiffPixels <= smallDiffPixelLimit {
+		content := fmt.Sprintf(
+			"🔔 【Wplace速報】変化検知 %s: **%.2f%%**に上昇(%d/%d px)",
+			metricLabel,
+			diffValue,
+			data.DiffPixels,
+			data.TotalPixels,
+		)
+		n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
+		state.SmallDiffThreadUsed = true
+		state.LastTier = currentTier
+		state.MentionTriggered = diffValue >= settings.MentionThreshold
+		state.WasZeroDiff = isZero
+		return
+	}
+
 	// 0%から変動した場合の通知（省電力モード解除）
 	if state.WasZeroDiff && !isZero {
 		n.sendZeroRecoveryNotification(guildID, settings, data, diffValue)
@@ -109,7 +164,17 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 
 	// 0%に戻った場合の通知（修復完了）
 	if !state.WasZeroDiff && isZero {
-		n.sendZeroCompletionNotification(guildID, settings, data)
+		if state.SmallDiffThreadUsed {
+			content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ %s: 0.00%% # Pixel Perfect!", metricLabel)
+			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
+			// Suppress tier/decrease spam for the small-diff thread.
+			state.LastTier = currentTier
+			state.MentionTriggered = false
+			state.WasZeroDiff = true
+			return
+		} else {
+			n.sendZeroCompletionNotification(guildID, settings, data)
+		}
 	}
 
 	// Tierが変化した場合のみ通知
@@ -122,6 +187,10 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	}
 
 	// 状態を更新
+	if data.DiffPixels > smallDiffPixelLimit {
+		// A "real" event happened; do not hijack the next completion with small-diff editing.
+		state.SmallDiffThreadUsed = false
+	}
 	state.LastTier = currentTier
 	state.MentionTriggered = diffValue >= settings.MentionThreshold
 	state.WasZeroDiff = isZero
