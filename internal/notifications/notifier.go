@@ -74,6 +74,8 @@ func (n *Notifier) getState(guildID string) *NotificationState {
 	return state
 }
 
+// smallDiffPixelLimit is the max pixel count treated as "small diff" noise.
+// While within this limit, we keep a single text message and edit it to reduce spam.
 const smallDiffPixelLimit = 10
 
 func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationState, content string) {
@@ -157,8 +159,30 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		return
 	}
 
-	// Leaving small-diff mode: from now on, follow the original notification flow.
-	if state.SmallDiffActive && data.DiffPixels > smallDiffPixelLimit {
+	// Leaving small-diff mode: once we exceed the pixel limit, stop editing the small-diff
+	// message. If we're still below the normal % threshold, edit it once to a generic
+	// "under threshold" message and do not emit embeds until either Pixel Perfect (0%)
+	// or the normal tier notifications kick in.
+	if state.SmallDiffActive && data.DiffPixels > smallDiffPixelLimit && !isZero {
+		if currentTier == TierNone {
+			under := settings.NotificationThreshold
+			if under <= 0 {
+				under = 10.0
+			}
+			content := fmt.Sprintf(
+				"🔔 【Wplace速報】変化検知 %s: **%.0f%%未満**に上昇(%d/%d px)",
+				metricLabel,
+				under,
+				data.DiffPixels,
+				data.TotalPixels,
+			)
+			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
+			state.SmallDiffActive = false
+			state.LastTier = currentTier
+			state.MentionTriggered = diffValue >= settings.MentionThreshold
+			state.WasZeroDiff = isZero
+			return
+		}
 		state.SmallDiffActive = false
 	}
 
