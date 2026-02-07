@@ -39,5 +39,14 @@
       "Blue-Screen-of-Death",
       "BSOD"
     ]
+  },
+  "Mesmerizer": {
+    "fullsize": "1800-829-0-0-1803-830-999-999",
+    "label": "メスメライザー",
+    "aliases": [
+      "mesmerizer",
+      "Mesmerizer",
+      "メスメライザー"
+    ]
   }
 }
