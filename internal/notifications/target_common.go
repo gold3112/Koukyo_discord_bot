@@ -21,6 +21,7 @@ type commonTargetConfig struct {
 	Label    string
 	Origin   string
 	Template string
+	Aliases  []string
 	Interval time.Duration
 }
 
@@ -55,8 +56,73 @@ type rawTarget struct {
 	Origin          string `json:"origin"`
 	Template        string `json:"template"`
 	TemplatePath    string `json:"template_path"`
+	Aliases         []string `json:"aliases"`
 	IntervalSeconds int    `json:"interval_seconds"`
 	Interval        int    `json:"interval"`
+}
+
+func normalizeTargetKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func cleanAliases(aliases []string, id string) []string {
+	if len(aliases) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(aliases))
+	idKey := normalizeTargetKey(id)
+	out := make([]string, 0, len(aliases))
+	for _, raw := range aliases {
+		a := strings.TrimSpace(raw)
+		if a == "" {
+			continue
+		}
+		key := normalizeTargetKey(a)
+		if key == "" || key == idKey {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, a)
+	}
+	return out
+}
+
+func targetIDMatches(cfg commonTargetConfig, query string) bool {
+	q := normalizeTargetKey(query)
+	if q == "" {
+		return false
+	}
+	if normalizeTargetKey(cfg.ID) == q {
+		return true
+	}
+	for _, a := range cfg.Aliases {
+		if normalizeTargetKey(a) == q {
+			return true
+		}
+	}
+	return false
+}
+
+func formatManualCommands(id string, aliases []string) string {
+	base := fmt.Sprintf("`!%s`", id)
+	if len(aliases) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(aliases))
+	for _, a := range aliases {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("`!%s`", a))
+	}
+	if len(out) == 0 {
+		return base
+	}
+	return base + "\naliases: " + strings.Join(out, ", ")
 }
 
 func loadTargetConfigs(path string, defaultInterval time.Duration) ([]commonTargetConfig, error) {
@@ -90,6 +156,7 @@ func parseTargetConfigs(raw []byte, defaultInterval time.Duration) ([]commonTarg
 		if cfg.Label == "" {
 			cfg.Label = cfg.ID
 		}
+		cfg.Aliases = cleanAliases(item.Aliases, cfg.ID)
 		if cfg.Origin == "" || cfg.Template == "" {
 			return commonTargetConfig{}, fmt.Errorf("target %s missing origin/template", cfg.ID)
 		}

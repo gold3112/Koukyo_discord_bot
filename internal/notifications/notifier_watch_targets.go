@@ -296,7 +296,7 @@ func (n *Notifier) buildWatchTargetEmbed(title string, target watchTargetConfig,
 			},
 			{
 				Name:   "手動取得",
-				Value:  fmt.Sprintf("`!%s`", target.ID),
+				Value:  formatManualCommands(target.ID, target.Aliases),
 				Inline: true,
 			},
 			{
@@ -412,7 +412,7 @@ func (w *watchTargetsRuntime) findTargetByID(targetID string) (watchTargetConfig
 		return watchTargetConfig{}, false
 	}
 	for _, cfg := range w.configs {
-		if cfg.ID == targetID {
+		if targetIDMatches(cfg, targetID) {
 			return cfg, true
 		}
 	}

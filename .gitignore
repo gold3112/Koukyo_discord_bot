@@ -36,3 +36,4 @@ data/
 !data/easter_eggs.json
 !data/.gitkeep
 !data/get_shortcuts.json
+!data/watch_targets.json

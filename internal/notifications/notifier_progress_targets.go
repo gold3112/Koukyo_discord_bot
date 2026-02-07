@@ -218,7 +218,7 @@ func (n *Notifier) buildProgressEmbed(title string, target progressTargetConfig,
 			},
 			{
 				Name:   "手動取得",
-				Value:  fmt.Sprintf("`!%s`", target.ID),
+				Value:  formatManualCommands(target.ID, target.Aliases),
 				Inline: true,
 			},
 			{
@@ -435,7 +435,7 @@ func (w *progressTargetsRuntime) findTargetByID(targetID string) (progressTarget
 		return progressTargetConfig{}, false
 	}
 	for _, cfg := range w.configs {
-		if cfg.ID == targetID {
+		if targetIDMatches(cfg, targetID) {
 			return cfg, true
 		}
 	}
