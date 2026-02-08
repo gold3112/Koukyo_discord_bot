@@ -25,6 +25,8 @@ type Monitor struct {
 	connected bool
 	mu        sync.RWMutex
 	writeMu   sync.Mutex
+	reconnectMu       sync.Mutex
+	lastIdleReconnect time.Time
 	tracker   *activity.Tracker
 	lastMu    sync.Mutex
 	lastMsgAt time.Time
@@ -241,8 +243,38 @@ func (m *Monitor) idleWatchLoop() {
 			if elapsed >= 2*time.Second {
 				log.Printf("WebSocket idle: no messages received for %s", elapsed.Round(time.Millisecond))
 			}
+			// Emergency recovery: if the websocket doesn't deliver any monitoring data
+			// for a long time (even if pongs are flowing), force a reconnect.
+			if elapsed >= 60*time.Second {
+				m.forceReconnectIfIdle()
+			}
 		}
 	}
+}
+
+func (m *Monitor) forceReconnectIfIdle() {
+	// Ensure only one idle reconnect attempt runs at a time.
+	m.reconnectMu.Lock()
+	defer m.reconnectMu.Unlock()
+
+	// Cooldown: avoid tight reconnect loops if the server is genuinely quiet.
+	now := time.Now()
+	if !m.lastIdleReconnect.IsZero() && now.Sub(m.lastIdleReconnect) < 60*time.Second {
+		return
+	}
+	m.lastIdleReconnect = now
+
+	m.mu.Lock()
+	conn := m.conn
+	// Mark disconnected so receiveLoop will reconnect via the conn==nil path quickly.
+	m.conn = nil
+	m.connected = false
+	m.mu.Unlock()
+
+	if conn != nil {
+		_ = conn.Close()
+	}
+	log.Printf("WebSocket idle >60s: forced reconnect triggered")
 }
 
 // handleMessage メッセージを処理
