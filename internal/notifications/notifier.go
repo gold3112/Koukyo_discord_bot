@@ -283,6 +283,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	// Switch to the normal (embed) flow once we exceed the pixel limit, and
 	// abandon the small-diff edit thread to avoid mixing completion notifications.
 	if !isZero && data.DiffPixels > smallDiffPixelLimit {
+		transitionedFromSmall := state.SmallDiffActive && !state.LargeDiffActive
 		state.LargeDiffActive = true
 		state.SmallDiffActive = false
 		// Cut off the edit-thread message: we won't edit it any further once we
@@ -293,6 +294,13 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		state.mu.Unlock()
 		state.SmallDiffLastContent = ""
 		state.SmallDiffNextUpdate = time.Time{}
+
+		// If we were previously in the small-diff edit mode, emit a one-time embed
+		// snapshot even if we're still under the normal % threshold. Otherwise the
+		// channel can look "stuck" until we hit Tier10+ or Pixel Perfect.
+		if transitionedFromSmall {
+			n.sendLargeDiffTransitionSnapshot(guildID, settings, data, diffValue)
+		}
 	}
 
 	// 0%から変動した場合の通知（省電力モード解除）
@@ -332,6 +340,104 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	state.LastTier = currentTier
 	state.MentionTriggered = diffValue >= settings.MentionThreshold
 	state.WasZeroDiff = isZero
+}
+
+// sendLargeDiffTransitionSnapshot posts an embed snapshot when we leave the small-diff
+// edit thread and switch to the normal embed flow. This is sent regardless of the
+// % threshold, so users can see that the bot is still alive.
+func (n *Notifier) sendLargeDiffTransitionSnapshot(
+	guildID string,
+	settings config.GuildSettings,
+	data *monitor.MonitorData,
+	diffValue float64,
+) {
+	if n == nil || n.session == nil {
+		return
+	}
+	if settings.NotificationChannel == nil {
+		return
+	}
+	channelID := *settings.NotificationChannel
+
+	// メトリックラベル
+	metricLabel := "差分率"
+	if settings.NotificationMetric == "weighted" {
+		metricLabel = "加重差分率"
+	}
+
+	message := fmt.Sprintf("🔔 【Wplace速報】変化検知 %s: **%.2f%%**に上昇(%d/%d px)", metricLabel, diffValue, data.DiffPixels, data.TotalPixels)
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "🟡 Wplace 変化検知",
+		Description: fmt.Sprintf("差分ピクセルが%dpxを超えました\n現在の%s: **%.2f%%**", smallDiffPixelLimit, metricLabel, diffValue),
+		Color:       0xF1C40F, // gold-ish
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "📊 差分率 (全体)",
+				Value:  fmt.Sprintf("%.2f%%", data.DiffPercentage),
+				Inline: true,
+			},
+			{
+				Name:   "📈 差分ピクセル (全体)",
+				Value:  fmt.Sprintf("%d / %d", data.DiffPixels, data.TotalPixels),
+				Inline: true,
+			},
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "自動通知システム",
+		},
+	}
+
+	if data.WeightedDiffPercentage != nil {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "🔍 加重差分率 (菊重視)",
+			Value:  fmt.Sprintf("%.2f%%", *data.WeightedDiffPercentage),
+			Inline: true,
+		})
+	}
+	if data.ChrysanthemumDiffPixels > 0 || data.BackgroundDiffPixels > 0 {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "🔍 差分ピクセル (菊/背景)",
+			Value:  fmt.Sprintf("菊 %d / %d | 背景 %d / %d", data.ChrysanthemumDiffPixels, data.ChrysanthemumTotalPixels, data.BackgroundDiffPixels, data.BackgroundTotalPixels),
+			Inline: false,
+		})
+	}
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "📐 監視ピクセル数",
+		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
+		Inline: false,
+	})
+	appendMainMonitorMapField(embed)
+
+	// 画像を取得して結合
+	var files []*discordgo.File
+	images := n.monitor.GetLatestImages()
+	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
+		combinedImage, err := embeds.CombineImages(images.LiveImage, images.DiffImage)
+		if err == nil {
+			files = append(files, &discordgo.File{
+				Name:        "koukyo_status.png",
+				ContentType: "image/png",
+				Reader:      combinedImage,
+			})
+			embed.Image = &discordgo.MessageEmbedImage{
+				URL: "attachment://koukyo_status.png",
+			}
+		} else {
+			log.Printf("Failed to combine images for transition snapshot: %v", err)
+		}
+	}
+
+	if _, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content: message,
+		Embeds:  []*discordgo.MessageEmbed{embed},
+		Files:   files,
+	}); err != nil {
+		log.Printf("Failed to send transition snapshot to channel %s: %v", channelID, err)
+	} else {
+		log.Printf("Transition snapshot sent to guild %s: %.2f%%", guildID, diffValue)
+	}
 }
 
 // scheduleDelayedNotification 遅延通知をスケジュール
