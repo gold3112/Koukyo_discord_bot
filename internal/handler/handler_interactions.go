@@ -91,6 +91,10 @@ func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.Inte
 		commands.HandleRegionMapConfirm(s, i, h.limiter)
 		return
 	}
+	if strings.HasPrefix(customID, "explanation_page:") {
+		commands.HandleExplanationPagination(s, i)
+		return
+	}
 
 	log.Printf("Unknown message component: %s", customID)
 }

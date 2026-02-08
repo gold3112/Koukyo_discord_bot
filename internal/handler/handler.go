@@ -34,6 +34,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 	commandsList = append(commandsList,
 		&commands.PingCommand{},
 		commands.NewInfoCommand(botInfo),
+		commands.NewExplanationCommand(),
 		commands.NewStatusCommand(botInfo),
 		commands.NewNowCommand(mon),
 		commands.NewTimeCommand(),
