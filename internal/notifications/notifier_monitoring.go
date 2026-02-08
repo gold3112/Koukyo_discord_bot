@@ -20,7 +20,14 @@ func (n *Notifier) StartMonitoring() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
+		lastHeartbeat := time.Now()
 		for range ticker.C {
+			// Lightweight heartbeat to detect a stuck monitoring loop.
+			if time.Since(lastHeartbeat) >= 60*time.Second {
+				lastHeartbeat = time.Now()
+				log.Printf("notifier: monitoring heartbeat power_save=%v guilds=%d", n.monitor.State.IsPowerSaveMode(), len(n.session.State.Guilds))
+			}
+
 			// 監視データが更新されたら全サーバーをチェック
 			if !n.monitor.State.HasData() {
 				continue
@@ -28,7 +35,8 @@ func (n *Notifier) StartMonitoring() {
 
 			currentPowerSave := n.monitor.State.IsPowerSaveMode()
 			if n.lastPowerSaveMode && !currentPowerSave {
-				n.notifyPowerSaveResume()
+				// For debugging: notify resume, but never block the monitoring loop.
+				go n.notifyPowerSaveResume()
 			}
 			n.lastPowerSaveMode = currentPowerSave
 
@@ -45,11 +53,29 @@ func (n *Notifier) StartMonitoring() {
 			// タイムラプス完了の自動投稿
 			t := n.monitor.State.GetTimelapseCompletedAt()
 			if t != nil && (n.lastTimelapseCompletedAt == nil || t.After(*n.lastTimelapseCompletedAt)) {
+				tt := *t
+				n.lastTimelapseCompletedAt = &tt // set early to avoid re-trigger loops
+
 				frames := n.monitor.State.GetLastTimelapseFrames()
 				if len(frames) > 0 {
-					n.postTimelapseToGuilds(frames)
-					tt := *t
-					n.lastTimelapseCompletedAt = &tt
+					// Timelapse can be heavy and spammy; never block monitoring.
+					go func(fr []monitor.TimelapseFrame) {
+						n.timelapsePostMu.Lock()
+						if n.timelapsePosting {
+							n.timelapsePostMu.Unlock()
+							return
+						}
+						n.timelapsePosting = true
+						n.timelapsePostMu.Unlock()
+
+						defer func() {
+							n.timelapsePostMu.Lock()
+							n.timelapsePosting = false
+							n.timelapsePostMu.Unlock()
+						}()
+
+						n.postTimelapseToGuilds(fr)
+					}(frames)
 				}
 			}
 

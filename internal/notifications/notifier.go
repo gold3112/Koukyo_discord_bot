@@ -13,8 +13,11 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+type dispatchFunc func()
+
 // NotificationState サーバーごとの通知状態
 type NotificationState struct {
+	mu              sync.Mutex
 	LastTier         Tier
 	MentionTriggered bool
 	WasZeroDiff      bool // 前回が0%だったか
@@ -22,6 +25,8 @@ type NotificationState struct {
 	SmallDiffMessageID        string
 	SmallDiffMessageChannelID string
 	SmallDiffActive           bool
+	SmallDiffLastContent      string
+	SmallDiffNextUpdate       time.Time
 }
 
 // Notifier 通知システム
@@ -33,6 +38,13 @@ type Notifier struct {
 	mu                       sync.RWMutex
 	lastTimelapseCompletedAt *time.Time
 	lastPowerSaveMode        bool
+	timelapsePostMu          sync.Mutex
+	timelapsePosting         bool
+	dispatchHigh             chan dispatchFunc
+	dispatchLowMu            sync.Mutex
+	dispatchLowPending       map[string]dispatchFunc
+	dispatchLowQueued        map[string]bool
+	dispatchLowQueue         chan string
 	dataDir                  string
 	lastDailyReportDate      string
 	vandalUserNotifier       *VandalUserNotifier
@@ -48,11 +60,87 @@ func NewNotifier(session *discordgo.Session, mon *monitor.Monitor, settings *con
 		monitor:              mon,
 		settings:             settings,
 		states:               make(map[string]*NotificationState),
+		dispatchHigh:         make(chan dispatchFunc, 256),
+		dispatchLowPending:   make(map[string]dispatchFunc),
+		dispatchLowQueued:    make(map[string]bool),
+		dispatchLowQueue:     make(chan string, 2048),
 		dataDir:              dataDir,
 		vandalUserNotifier:   NewVandalUserNotifier(session, settings),
 		fixUserNotifier:      NewFixUserNotifier(session, settings),
 		watchTargetsState:    newWatchTargetsRuntime(dataDir),
 		progressTargetsState: newProgressTargetsRuntime(dataDir),
+	}
+}
+
+func (n *Notifier) startDispatchWorker() {
+	if n == nil {
+		return
+	}
+	go func() {
+		for {
+			// High priority (FIFO, no coalescing).
+			select {
+			case fn := <-n.dispatchHigh:
+				if fn != nil {
+					fn()
+				}
+				continue
+			default:
+			}
+
+			// If no high-priority work is immediately available, block on either.
+			select {
+			case fn := <-n.dispatchHigh:
+				if fn != nil {
+					fn()
+				}
+			case key := <-n.dispatchLowQueue:
+				n.dispatchLowMu.Lock()
+				fn := n.dispatchLowPending[key]
+				delete(n.dispatchLowPending, key)
+				n.dispatchLowQueued[key] = false
+				n.dispatchLowMu.Unlock()
+				if fn != nil {
+					fn()
+				}
+			}
+		}
+	}()
+}
+
+func (n *Notifier) enqueueHigh(fn dispatchFunc) {
+	if n == nil || fn == nil {
+		return
+	}
+	select {
+	case n.dispatchHigh <- fn:
+	default:
+		// Drop if overloaded; do not block the monitoring loop.
+		log.Printf("dispatch: high queue full, dropping notification")
+	}
+}
+
+func (n *Notifier) enqueueLow(key string, fn dispatchFunc) {
+	if n == nil || fn == nil || key == "" {
+		return
+	}
+	n.dispatchLowMu.Lock()
+	n.dispatchLowPending[key] = fn
+	if n.dispatchLowQueued[key] {
+		n.dispatchLowMu.Unlock()
+		return
+	}
+	n.dispatchLowQueued[key] = true
+	n.dispatchLowMu.Unlock()
+
+	select {
+	case n.dispatchLowQueue <- key:
+	default:
+		// Queue full: mark as not queued so we can try again later; keep latest pending.
+		n.dispatchLowMu.Lock()
+		n.dispatchLowQueued[key] = false
+		n.dispatchLowMu.Unlock()
+		log.Printf("dispatch: low queue full, dropping enqueue key=%s", key)
 	}
 }
 
@@ -78,9 +166,21 @@ func (n *Notifier) getState(guildID string) *NotificationState {
 // While within this limit, we keep a single text message and edit it to reduce spam.
 const smallDiffPixelLimit = 10
 
-func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationState, content string) {
+const smallDiffMinUpdateInterval = 5 * time.Second
+
+func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationState, content string, force bool) {
 	if n == nil || n.session == nil || state == nil || channelID == "" {
 		return
+	}
+	now := time.Now()
+	if !force {
+		// Avoid hammering Discord with edits every tick; keep the loop responsive.
+		if content == state.SmallDiffLastContent && !state.SmallDiffNextUpdate.IsZero() && now.Before(state.SmallDiffNextUpdate) {
+			return
+		}
+		if !state.SmallDiffNextUpdate.IsZero() && now.Before(state.SmallDiffNextUpdate) {
+			return
+		}
 	}
 	// Try edit first (preferred: keep one message and update it).
 	if state.SmallDiffMessageID != "" && state.SmallDiffMessageChannelID != "" {
@@ -91,6 +191,8 @@ func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationS
 		}
 		if editChannelID != "" {
 			if _, err := n.session.ChannelMessageEdit(editChannelID, state.SmallDiffMessageID, content); err == nil {
+				state.SmallDiffLastContent = content
+				state.SmallDiffNextUpdate = now.Add(smallDiffMinUpdateInterval)
 				return
 			}
 		}
@@ -103,6 +205,8 @@ func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationS
 	}
 	state.SmallDiffMessageID = msg.ID
 	state.SmallDiffMessageChannelID = channelID
+	state.SmallDiffLastContent = content
+	state.SmallDiffNextUpdate = now.Add(smallDiffMinUpdateInterval)
 }
 
 // CheckAndNotify 差分率をチェックして通知を送信
@@ -151,7 +255,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 			data.DiffPixels,
 			data.TotalPixels,
 		)
-		n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
+		n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, false)
 		state.SmallDiffActive = true
 		state.LastTier = currentTier
 		state.MentionTriggered = diffValue >= settings.MentionThreshold
@@ -176,7 +280,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 				data.DiffPixels,
 				data.TotalPixels,
 			)
-			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
+			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, true)
 			state.SmallDiffActive = false
 			state.LastTier = currentTier
 			state.MentionTriggered = diffValue >= settings.MentionThreshold
@@ -195,7 +299,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	if !state.WasZeroDiff && isZero {
 		if state.SmallDiffActive {
 			content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ %s: 0.00%% # Pixel Perfect!", metricLabel)
-			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content)
+			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, true)
 			// Suppress tier/decrease spam for the small-diff thread.
 			state.LastTier = currentTier
 			state.MentionTriggered = false
