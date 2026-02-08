@@ -25,6 +25,10 @@ type NotificationState struct {
 	SmallDiffMessageID        string
 	SmallDiffMessageChannelID string
 	SmallDiffActive           bool
+	// Once we observe a "large diff" (> smallDiffPixelLimit), we stay on the normal
+	// embed-based flow until the diff returns to 0%. This prevents mixing the
+	// small-diff edit thread with Pixel Perfect notifications.
+	LargeDiffActive bool
 	SmallDiffLastContent      string
 	SmallDiffNextUpdate       time.Time
 }
@@ -182,31 +186,42 @@ func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationS
 			return
 		}
 	}
-	// Try edit first (preferred: keep one message and update it).
-	if state.SmallDiffMessageID != "" && state.SmallDiffMessageChannelID != "" {
-		// If the notification channel changed, we cannot edit the old message in the new channel.
-		editChannelID := state.SmallDiffMessageChannelID
-		if editChannelID != channelID {
-			editChannelID = ""
-		}
-		if editChannelID != "" {
-			if _, err := n.session.ChannelMessageEdit(editChannelID, state.SmallDiffMessageID, content); err == nil {
-				state.SmallDiffLastContent = content
-				state.SmallDiffNextUpdate = now.Add(smallDiffMinUpdateInterval)
+
+	// Optimistic throttle: even if the dispatcher is backlogged, avoid enqueuing
+	// edits too frequently.
+	state.SmallDiffLastContent = content
+	state.SmallDiffNextUpdate = now.Add(smallDiffMinUpdateInterval)
+
+	// Coalesce small-diff updates per guild+channel: keep only the latest edit.
+	key := fmt.Sprintf("small:%s:%s", channelID, guildKeyFromState(state))
+	n.enqueueLow(key, func() {
+		state.mu.Lock()
+		msgID := state.SmallDiffMessageID
+		msgCh := state.SmallDiffMessageChannelID
+		state.mu.Unlock()
+
+		// Try edit first.
+		if msgID != "" && msgCh == channelID {
+			if _, err := n.session.ChannelMessageEdit(channelID, msgID, content); err == nil {
 				return
 			}
 		}
-	}
+		msg, err := n.session.ChannelMessageSend(channelID, content)
+		if err != nil {
+			log.Printf("Failed to send small-diff notification to channel %s: %v", channelID, err)
+			return
+		}
+		state.mu.Lock()
+		state.SmallDiffMessageID = msg.ID
+		state.SmallDiffMessageChannelID = channelID
+		state.mu.Unlock()
+	})
+}
 
-	msg, err := n.session.ChannelMessageSend(channelID, content)
-	if err != nil {
-		log.Printf("Failed to send small-diff notification to channel %s: %v", channelID, err)
-		return
-	}
-	state.SmallDiffMessageID = msg.ID
-	state.SmallDiffMessageChannelID = channelID
-	state.SmallDiffLastContent = content
-	state.SmallDiffNextUpdate = now.Add(smallDiffMinUpdateInterval)
+func guildKeyFromState(state *NotificationState) string {
+	// State objects are per guild in n.states; we just need a stable key for coalescing.
+	// Pointer identity is stable within process lifetime.
+	return fmt.Sprintf("%p", state)
 }
 
 // CheckAndNotify 差分率をチェックして通知を送信
@@ -247,7 +262,9 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	if settings.NotificationMetric == "weighted" {
 		metricLabel = "加重差分率"
 	}
-	if data.DiffPixels > 0 && data.DiffPixels <= smallDiffPixelLimit {
+	// If we've already observed a "large diff", do not go back to the small-diff
+	// edit thread until we hit 0% (Pixel Perfect).
+	if !state.LargeDiffActive && data.DiffPixels > 0 && data.DiffPixels <= smallDiffPixelLimit {
 		content := fmt.Sprintf(
 			"🔔 【Wplace速報】変化検知 %s: **%.2f%%**に上昇(%d/%d px)",
 			metricLabel,
@@ -263,31 +280,19 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		return
 	}
 
-	// Leaving small-diff mode: once we exceed the pixel limit, stop editing the small-diff
-	// message. If we're still below the normal % threshold, edit it once to a generic
-	// "under threshold" message and do not emit embeds until either Pixel Perfect (0%)
-	// or the normal tier notifications kick in.
-	if state.SmallDiffActive && data.DiffPixels > smallDiffPixelLimit && !isZero {
-		if currentTier == TierNone {
-			under := settings.NotificationThreshold
-			if under <= 0 {
-				under = 10.0
-			}
-			content := fmt.Sprintf(
-				"🔔 【Wplace速報】変化検知 %s: **%.0f%%未満**に上昇(%d/%d px)",
-				metricLabel,
-				under,
-				data.DiffPixels,
-				data.TotalPixels,
-			)
-			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, true)
-			state.SmallDiffActive = false
-			state.LastTier = currentTier
-			state.MentionTriggered = diffValue >= settings.MentionThreshold
-			state.WasZeroDiff = isZero
-			return
-		}
+	// Switch to the normal (embed) flow once we exceed the pixel limit, and
+	// abandon the small-diff edit thread to avoid mixing completion notifications.
+	if !isZero && data.DiffPixels > smallDiffPixelLimit {
+		state.LargeDiffActive = true
 		state.SmallDiffActive = false
+		// Cut off the edit-thread message: we won't edit it any further once we
+		// entered large-diff mode.
+		state.mu.Lock()
+		state.SmallDiffMessageID = ""
+		state.SmallDiffMessageChannelID = ""
+		state.mu.Unlock()
+		state.SmallDiffLastContent = ""
+		state.SmallDiffNextUpdate = time.Time{}
 	}
 
 	// 0%から変動した場合の通知（省電力モード解除）
@@ -297,7 +302,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 
 	// 0%に戻った場合の通知（修復完了）
 	if !state.WasZeroDiff && isZero {
-		if state.SmallDiffActive {
+		if state.SmallDiffActive && !state.LargeDiffActive {
 			content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ %s: 0.00%% # Pixel Perfect!", metricLabel)
 			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, true)
 			// Suppress tier/decrease spam for the small-diff thread.
@@ -322,6 +327,7 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	// 状態を更新
 	if isZero {
 		state.SmallDiffActive = false
+		state.LargeDiffActive = false
 	}
 	state.LastTier = currentTier
 	state.MentionTriggered = diffValue >= settings.MentionThreshold

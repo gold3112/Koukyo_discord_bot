@@ -87,6 +87,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Prevent rare but catastrophic "stuck REST call" situations from blocking the
+	// monitoring loop indefinitely (e.g. small-diff edits).
+	if dg.Client != nil {
+		dg.Client.Timeout = 15 * time.Second
+	}
 
 	// Intentsを設定
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent | discordgo.IntentsGuilds
