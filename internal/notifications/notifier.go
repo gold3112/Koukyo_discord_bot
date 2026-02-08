@@ -17,18 +17,14 @@ type dispatchFunc func()
 
 // NotificationState サーバーごとの通知状態
 type NotificationState struct {
-	mu              sync.Mutex
-	LastTier         Tier
-	MentionTriggered bool
-	WasZeroDiff      bool // 前回が0%だったか
-	// Small-diff thread for suppressing noisy notifications when only a few pixels changed.
+	mu                        sync.Mutex
+	LastTier                  Tier
+	MentionTriggered          bool
+	WasZeroDiff               bool // 前回が0%だったか
 	SmallDiffMessageID        string
 	SmallDiffMessageChannelID string
 	SmallDiffActive           bool
-	// Once we observe a "large diff" (> smallDiffPixelLimit), we stay on the normal
-	// embed-based flow until the diff returns to 0%. This prevents mixing the
-	// small-diff edit thread with Pixel Perfect notifications.
-	LargeDiffActive bool
+	LargeDiffActive           bool
 	SmallDiffLastContent      string
 	SmallDiffNextUpdate       time.Time
 }
@@ -224,47 +220,56 @@ func guildKeyFromState(state *NotificationState) string {
 	return fmt.Sprintf("%p", state)
 }
 
-// CheckAndNotify 差分率をチェックして通知を送信
+// CheckAndNotify 差分率をチェックして通知を送信 (Refactored)
 func (n *Notifier) CheckAndNotify(guildID string) {
 	settings := n.settings.GetGuildSettings(guildID)
 
-	// 自動通知が無効の場合はスキップ
-	if !settings.AutoNotifyEnabled {
-		return
-	}
-
-	// 通知チャンネルが設定されていない場合はスキップ
-	if settings.NotificationChannel == nil {
+	// 自動通知が無効、または通知チャンネル未設定の場合はスキップ
+	if !settings.AutoNotifyEnabled || settings.NotificationChannel == nil {
 		return
 	}
 
 	// 監視データを取得
 	data := n.monitor.GetLatestData()
-	if data == nil {
-		return
-	}
-
-	if n.monitor.State.IsPowerSaveMode() {
+	if data == nil || n.monitor.State.IsPowerSaveMode() {
 		return
 	}
 
 	// 通知指標の値を取得
 	diffValue := getDiffValue(data, settings.NotificationMetric)
 	isZero := isZeroDiff(diffValue)
-
-	// 現在のTierを判定
 	currentTier := calculateTier(diffValue, settings.NotificationThreshold)
 	state := n.getState(guildID)
 
-	// Suppress noisy notifications when only a few pixels changed.
-	// For <=10px changes we keep a single text message and edit it as the state changes.
-	metricLabel := "差分率"
-	if settings.NotificationMetric == "weighted" {
-		metricLabel = "加重差分率"
+	// 1. 小規模差分（Small Diff）の処理
+	if n.handleSmallDiff(state, settings, data, diffValue, currentTier, isZero) {
+		return
 	}
-	// If we've already observed a "large diff", do not go back to the small-diff
-	// edit thread until we hit 0% (Pixel Perfect).
+
+	// 2. 大規模差分への遷移チェック
+	n.handleLargeDiffTransition(guildID, state, settings, data, diffValue, isZero)
+
+	// 3. 0%復帰・完了・Tier変動の標準通知処理
+	n.handleStandardNotification(guildID, state, settings, data, diffValue, currentTier, isZero)
+
+	// 4. 状態更新
+	n.updateState(state, isZero, currentTier, diffValue, settings)
+}
+
+// handleSmallDiff 小規模差分の処理。trueを返した場合は後続処理をスキップする。
+func (n *Notifier) handleSmallDiff(
+	state *NotificationState,
+	settings config.GuildSettings,
+	data *monitor.MonitorData,
+	diffValue float64,
+	currentTier Tier,
+	isZero bool,
+) bool {
 	if !state.LargeDiffActive && data.DiffPixels > 0 && data.DiffPixels <= smallDiffPixelLimit {
+		metricLabel := "差分率"
+		if settings.NotificationMetric == "weighted" {
+			metricLabel = "加重差分率"
+		}
 		content := fmt.Sprintf(
 			"🔔 【Wplace速報】変化検知 %s: **%.2f%%**に上昇(%d/%d px)",
 			metricLabel,
@@ -277,17 +282,24 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		state.LastTier = currentTier
 		state.MentionTriggered = diffValue >= settings.MentionThreshold
 		state.WasZeroDiff = isZero
-		return
+		return true
 	}
+	return false
+}
 
-	// Switch to the normal (embed) flow once we exceed the pixel limit, and
-	// abandon the small-diff edit thread to avoid mixing completion notifications.
+// handleLargeDiffTransition 大規模差分モードへの遷移処理
+func (n *Notifier) handleLargeDiffTransition(
+	guildID string,
+	state *NotificationState,
+	settings config.GuildSettings,
+	data *monitor.MonitorData,
+	diffValue float64,
+	isZero bool,
+) {
 	if !isZero && data.DiffPixels > smallDiffPixelLimit {
 		transitionedFromSmall := state.SmallDiffActive && !state.LargeDiffActive
 		state.LargeDiffActive = true
 		state.SmallDiffActive = false
-		// Cut off the edit-thread message: we won't edit it any further once we
-		// entered large-diff mode.
 		state.mu.Lock()
 		state.SmallDiffMessageID = ""
 		state.SmallDiffMessageChannelID = ""
@@ -295,44 +307,57 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 		state.SmallDiffLastContent = ""
 		state.SmallDiffNextUpdate = time.Time{}
 
-		// If we were previously in the small-diff edit mode, emit a one-time embed
-		// snapshot even if we're still under the normal % threshold. Otherwise the
-		// channel can look "stuck" until we hit Tier10+ or Pixel Perfect.
 		if transitionedFromSmall {
 			n.sendLargeDiffTransitionSnapshot(guildID, settings, data, diffValue)
 		}
 	}
+}
 
-	// 0%から変動した場合の通知（省電力モード解除）
+// handleStandardNotification 通常の通知フロー
+func (n *Notifier) handleStandardNotification(
+	guildID string,
+	state *NotificationState,
+	settings config.GuildSettings,
+	data *monitor.MonitorData,
+	diffValue float64,
+	currentTier Tier,
+	isZero bool,
+) {
 	if state.WasZeroDiff && !isZero {
 		n.sendZeroRecoveryNotification(guildID, settings, data, diffValue)
 	}
 
-	// 0%に戻った場合の通知（修復完了）
 	if !state.WasZeroDiff && isZero {
 		if state.SmallDiffActive && !state.LargeDiffActive {
+			metricLabel := "差分率"
+			if settings.NotificationMetric == "weighted" {
+				metricLabel = "加重差分率"
+			}
 			content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ %s: 0.00%% # Pixel Perfect!", metricLabel)
 			n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, true)
-			// Suppress tier/decrease spam for the small-diff thread.
-			state.LastTier = currentTier
-			state.MentionTriggered = false
-			state.WasZeroDiff = true
 			return
 		} else {
 			n.sendZeroCompletionNotification(guildID, settings, data)
 		}
 	}
 
-	// Tierが変化した場合のみ通知
-	if currentTier != state.LastTier {
+	if !isZero && currentTier != state.LastTier {
 		if currentTier > state.LastTier {
 			n.sendNotification(guildID, settings, data, currentTier, diffValue)
 		} else {
 			n.sendDecreaseNotification(guildID, settings, data, currentTier, diffValue)
 		}
 	}
+}
 
-	// 状態を更新
+// updateState 通知後の状態更新
+func (n *Notifier) updateState(
+	state *NotificationState,
+	isZero bool,
+	currentTier Tier,
+	diffValue float64,
+	settings config.GuildSettings,
+) {
 	if isZero {
 		state.SmallDiffActive = false
 		state.LargeDiffActive = false
@@ -342,24 +367,18 @@ func (n *Notifier) CheckAndNotify(guildID string) {
 	state.WasZeroDiff = isZero
 }
 
-// sendLargeDiffTransitionSnapshot posts an embed snapshot when we leave the small-diff
-// edit thread and switch to the normal embed flow. This is sent regardless of the
-// % threshold, so users can see that the bot is still alive.
+// sendLargeDiffTransitionSnapshot posts an embed snapshot when we leave the small-diff thread.
 func (n *Notifier) sendLargeDiffTransitionSnapshot(
 	guildID string,
 	settings config.GuildSettings,
 	data *monitor.MonitorData,
 	diffValue float64,
 ) {
-	if n == nil || n.session == nil {
-		return
-	}
-	if settings.NotificationChannel == nil {
+	if n == nil || n.session == nil || settings.NotificationChannel == nil {
 		return
 	}
 	channelID := *settings.NotificationChannel
 
-	// メトリックラベル
 	metricLabel := "差分率"
 	if settings.NotificationMetric == "weighted" {
 		metricLabel = "加重差分率"
@@ -410,7 +429,6 @@ func (n *Notifier) sendLargeDiffTransitionSnapshot(
 	})
 	appendMainMonitorMapField(embed)
 
-	// 画像を取得して結合
 	var files []*discordgo.File
 	images := n.monitor.GetLatestImages()
 	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
@@ -440,7 +458,6 @@ func (n *Notifier) sendLargeDiffTransitionSnapshot(
 	}
 }
 
-// scheduleDelayedNotification 遅延通知をスケジュール
 // sendNotification 通知を送信
 func (n *Notifier) sendNotification(
 	guildID string,
@@ -451,19 +468,16 @@ func (n *Notifier) sendNotification(
 ) {
 	channelID := *settings.NotificationChannel
 
-	// メンション文字列を構築
 	mentionStr := ""
 	if diffValue >= settings.MentionThreshold && settings.MentionRole != nil {
 		mentionStr = fmt.Sprintf("<@&%s> ", *settings.MentionRole)
 	}
 
-	// メトリックラベル
 	metricLabel := "差分率"
 	if settings.NotificationMetric == "weighted" {
 		metricLabel = "加重差分率"
 	}
 
-	// Tier に応じた通知メッセージを構築
 	var tierDesc string
 	switch tier {
 	case Tier100:
@@ -490,7 +504,6 @@ func (n *Notifier) sendNotification(
 		tierDesc = "変動"
 	}
 
-	// 通知メッセージを作成（新フォーマット）
 	message := fmt.Sprintf(
 		"%s【Wplace速報】 🚨 %sが%sしました！[現在%.2f%%]",
 		mentionStr,
@@ -499,7 +512,6 @@ func (n *Notifier) sendNotification(
 		diffValue,
 	)
 
-	// Embedを作成
 	embed := &discordgo.MessageEmbed{
 		Title:       "🏯 Wplace 荒らし検知",
 		Description: fmt.Sprintf("現在の%s: **%.2f%%**", metricLabel, diffValue),
@@ -522,7 +534,6 @@ func (n *Notifier) sendNotification(
 		},
 	}
 
-	// 加重差分率がある場合は追加
 	if data.WeightedDiffPercentage != nil {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 加重差分率 (菊重視)",
@@ -531,7 +542,6 @@ func (n *Notifier) sendNotification(
 		})
 	}
 
-	// 加重差分ピクセルがある場合は追加
 	if data.ChrysanthemumDiffPixels > 0 || data.BackgroundDiffPixels > 0 {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 差分ピクセル (菊/背景)",
@@ -540,7 +550,6 @@ func (n *Notifier) sendNotification(
 		})
 	}
 
-	// 監視ピクセル数を追加
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "📐 監視ピクセル数",
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
@@ -548,7 +557,6 @@ func (n *Notifier) sendNotification(
 	})
 	appendMainMonitorMapField(embed)
 
-	// 画像を取得して結合
 	var files []*discordgo.File
 	images := n.monitor.GetLatestImages()
 	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
@@ -567,7 +575,6 @@ func (n *Notifier) sendNotification(
 		}
 	}
 
-	// メッセージを送信
 	_, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content: message,
 		Embeds:  []*discordgo.MessageEmbed{embed},
@@ -591,7 +598,6 @@ func (n *Notifier) sendDecreaseNotification(
 ) {
 	channelID := *settings.NotificationChannel
 
-	// メトリックラベル
 	metricLabel := "差分率"
 	if settings.NotificationMetric == "weighted" {
 		metricLabel = "加重差分率"
@@ -627,7 +633,6 @@ func (n *Notifier) sendDecreaseNotification(
 		},
 	}
 
-	// 加重差分率がある場合は追加
 	if data.WeightedDiffPercentage != nil {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 加重差分率 (菊重視)",
@@ -636,7 +641,6 @@ func (n *Notifier) sendDecreaseNotification(
 		})
 	}
 
-	// 加重差分ピクセルがある場合は追加
 	if data.ChrysanthemumDiffPixels > 0 || data.BackgroundDiffPixels > 0 {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 差分ピクセル (菊/背景)",
@@ -645,7 +649,6 @@ func (n *Notifier) sendDecreaseNotification(
 		})
 	}
 
-	// 監視ピクセル数を追加
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "📐 監視ピクセル数",
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
@@ -653,7 +656,6 @@ func (n *Notifier) sendDecreaseNotification(
 	})
 	appendMainMonitorMapField(embed)
 
-	// 画像を取得して結合
 	var files []*discordgo.File
 	images := n.monitor.GetLatestImages()
 	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
@@ -672,7 +674,6 @@ func (n *Notifier) sendDecreaseNotification(
 		}
 	}
 
-	// メッセージを送信
 	_, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content: message,
 		Embeds:  []*discordgo.MessageEmbed{embed},
@@ -695,16 +696,13 @@ func (n *Notifier) sendZeroRecoveryNotification(
 ) {
 	channelID := *settings.NotificationChannel
 
-	// メトリックラベル
 	metricLabel := "差分率"
 	if settings.NotificationMetric == "weighted" {
 		metricLabel = "加重差分率"
 	}
 
-	// 通知メッセージを作成
 	message := fmt.Sprintf("🔔 【Wplace速報】変化検知 %s: **%.2f%%**に上昇", metricLabel, diffValue)
 
-	// Embedを作成
 	embed := &discordgo.MessageEmbed{
 		Title:       "🟢 Wplace 変化検知",
 		Description: fmt.Sprintf("完全な0%%から変動しました\n現在の%s: **%.2f%%**", metricLabel, diffValue),
@@ -727,7 +725,6 @@ func (n *Notifier) sendZeroRecoveryNotification(
 		},
 	}
 
-	// 加重差分率がある場合は追加
 	if data.WeightedDiffPercentage != nil {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 加重差分率 (菊重視)",
@@ -736,7 +733,6 @@ func (n *Notifier) sendZeroRecoveryNotification(
 		})
 	}
 
-	// 加重差分ピクセルがある場合は追加
 	if data.ChrysanthemumDiffPixels > 0 || data.BackgroundDiffPixels > 0 {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 差分ピクセル (菊/背景)",
@@ -745,7 +741,6 @@ func (n *Notifier) sendZeroRecoveryNotification(
 		})
 	}
 
-	// 監視ピクセル数を追加
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "📐 監視ピクセル数",
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
@@ -753,7 +748,6 @@ func (n *Notifier) sendZeroRecoveryNotification(
 	})
 	appendMainMonitorMapField(embed)
 
-	// 画像を取得して結合
 	var files []*discordgo.File
 	images := n.monitor.GetLatestImages()
 	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
@@ -772,7 +766,6 @@ func (n *Notifier) sendZeroRecoveryNotification(
 		}
 	}
 
-	// メッセージを送信
 	_, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content: message,
 		Embeds:  []*discordgo.MessageEmbed{embed},
@@ -794,16 +787,13 @@ func (n *Notifier) sendZeroCompletionNotification(
 ) {
 	channelID := *settings.NotificationChannel
 
-	// メトリックラベル
 	metricLabel := "差分率"
 	if settings.NotificationMetric == "weighted" {
 		metricLabel = "加重差分率"
 	}
 
-	// 通知メッセージを作成
 	message := fmt.Sprintf("✅ 【Wplace速報】修復完了！ %s: **0.00%%** # Pixel Perfect!", metricLabel)
 
-	// Embedを作成
 	embed := &discordgo.MessageEmbed{
 		Title:       "🎉 Wplace 修復完了",
 		Description: fmt.Sprintf("%sが0%%に戻りました\n# Pixel Perfect!", metricLabel),
@@ -826,7 +816,6 @@ func (n *Notifier) sendZeroCompletionNotification(
 		},
 	}
 
-	// 加重差分率がある場合は追加
 	if data.WeightedDiffPercentage != nil {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "🔍 加重差分率 (菊重視)",
@@ -835,7 +824,6 @@ func (n *Notifier) sendZeroCompletionNotification(
 		})
 	}
 
-	// 監視ピクセル数を追加
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "📐 監視ピクセル数",
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
@@ -843,7 +831,6 @@ func (n *Notifier) sendZeroCompletionNotification(
 	})
 	appendMainMonitorMapField(embed)
 
-	// 画像を取得して結合
 	var files []*discordgo.File
 	images := n.monitor.GetLatestImages()
 	if images != nil && images.LiveImage != nil && images.DiffImage != nil {
@@ -862,7 +849,6 @@ func (n *Notifier) sendZeroCompletionNotification(
 		}
 	}
 
-	// メッセージを送信
 	_, err := n.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content: message,
 		Embeds:  []*discordgo.MessageEmbed{embed},
