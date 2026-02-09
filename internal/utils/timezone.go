@@ -25,6 +25,7 @@ func GetCommonTimezones() []*TimezoneInfo {
 		{"UTC", "🌐", "協定世界時 (UTC)", "UTC"},
 		{"America/Los_Angeles", "🇺🇸", "サンタクララ (PST/PDT)", "America/Los_Angeles"},
 		{"Europe/Paris", "🇫🇷", "フランス (CET/CEST)", "Europe/Paris"},
+		{"America/Argentina/Buenos_Aires", "🇦🇷", "アルゼンチン (ART)", "America/Argentina/Buenos_Aires"},
 		{"Asia/Tokyo", "🇯🇵", "日本標準時 (JST)", "Asia/Tokyo"},
 	}
 
@@ -53,6 +54,7 @@ func ParseTimezone(tzName string) (*time.Location, error) {
 		"jst":  "Asia/Tokyo",
 		"cet":  "Europe/Paris",
 		"cest": "Europe/Paris",
+		"art":  "America/Argentina/Buenos_Aires",
 		"utc":  "UTC",
 	}
 
@@ -148,6 +150,8 @@ func GetTimezoneLabel(tzName string) string {
 		"Europe/Paris":        "フランス",
 		"CET":                 "フランス",
 		"CEST":                "フランス",
+		"America/Argentina/Buenos_Aires": "アルゼンチン",
+		"ART":                 "アルゼンチン",
 		"Asia/Tokyo":          "日本標準時",
 		"JST":                 "日本標準時",
 	}
@@ -168,6 +172,8 @@ func GetTimezoneFlag(tzName string) string {
 		"Europe/Paris":        "🇫🇷",
 		"CET":                 "🇫🇷",
 		"CEST":                "🇫🇷",
+		"America/Argentina/Buenos_Aires": "🇦🇷",
+		"ART":                 "🇦🇷",
 		"Asia/Tokyo":          "🇯🇵",
 		"JST":                 "🇯🇵",
 	}
