@@ -25,14 +25,29 @@ func GetCommonTimezones() []*TimezoneInfo {
 		{"UTC", "🌐", "協定世界時 (UTC)", "UTC"},
 		{"America/Los_Angeles", "🇺🇸", "サンタクララ (PST/PDT)", "America/Los_Angeles"},
 		{"Europe/Paris", "🇫🇷", "フランス (CET/CEST)", "Europe/Paris"},
-		{"America/Argentina/Buenos_Aires", "🇦🇷", "アルゼンチン (ART)", "America/Argentina/Buenos_Aires"},
+		{"America/Argentina/Buenos_Aires", "🇦🇷", "アルゼンチン (ART)", "fixed:ART:-3"},
 		{"Asia/Tokyo", "🇯🇵", "日本標準時 (JST)", "Asia/Tokyo"},
 	}
 
 	var timezones []*TimezoneInfo
 	for _, l := range locations {
-		loc, err := time.LoadLocation(l.tz)
-		if err != nil {
+		var loc *time.Location
+		var err error
+
+		if strings.HasPrefix(l.tz, "fixed:") {
+			// 形式: fixed:NAME:OFFSET (OFFSETは時間単位)
+			parts := strings.Split(l.tz, ":")
+			if len(parts) == 3 {
+				name := parts[1]
+				var offset int
+				fmt.Sscanf(parts[2], "%d", &offset)
+				loc = time.FixedZone(name, offset*3600)
+			}
+		} else {
+			loc, err = time.LoadLocation(l.tz)
+		}
+
+		if err != nil || loc == nil {
 			continue
 		}
 		timezones = append(timezones, &TimezoneInfo{
@@ -61,6 +76,15 @@ func ParseTimezone(tzName string) (*time.Location, error) {
 	// 短縮形をチェック
 	key := strings.ToLower(strings.TrimSpace(tzName))
 	if fullName, ok := shortNames[key]; ok {
+		if strings.HasPrefix(fullName, "fixed:") {
+			parts := strings.Split(fullName, ":")
+			if len(parts) == 3 {
+				name := parts[1]
+				var offset int
+				fmt.Sscanf(parts[2], "%d", &offset)
+				return time.FixedZone(name, offset*3600), nil
+			}
+		}
 		return time.LoadLocation(fullName)
 	}
 
