@@ -80,6 +80,8 @@ type DailyPixelCounts struct {
 const (
 	newUserNotifyThreshold = 5
 	newUserNotifyWindow    = 5 * time.Minute
+	stateFlushInterval     = 2 * time.Second
+	recentEventsGCInterval = 1 * time.Minute
 )
 
 type Tracker struct {
@@ -103,6 +105,9 @@ type Tracker struct {
 	// Recent event windows for "N actions within 5 minutes" detection.
 	recentVandalEvents map[string][]time.Time
 	recentFixEvents    map[string][]time.Time
+	dirtyActivity      bool
+	dirtyVandalState   bool
+	dirtyDailyCounts   bool
 }
 
 type NewUserCallback func(kind string, user UserActivity)
@@ -145,6 +150,8 @@ func (t *Tracker) SetNewUserCallback(cb NewUserCallback) {
 func (t *Tracker) Start() {
 	go t.worker()
 	go t.diffWorker()
+	go t.flushWorker()
+	go t.recentEventsGCWorker()
 }
 
 func (t *Tracker) Stop() {
@@ -215,19 +222,9 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 	}
 	t.dailyCounts.Vandal[dateKey] += added
 	t.dailyCounts.Fix[dateKey] += removed
-	vandalPayload, vErr := json.MarshalIndent(t.vandalState, "", "  ")
-	dailyPayload, dErr := json.MarshalIndent(t.dailyCounts, "", "  ")
+	t.dirtyVandalState = true
+	t.dirtyDailyCounts = true
 	t.mu.Unlock()
-	if vErr != nil {
-		log.Printf("failed to marshal vandal state: %v", vErr)
-	} else if err := t.writeFileAtomic("vandalized_pixels.json", vandalPayload); err != nil {
-		log.Printf("failed to save vandal state: %v", err)
-	}
-	if dErr != nil {
-		log.Printf("failed to marshal daily counts: %v", dErr)
-	} else if err := t.writeFileAtomic("vandal_daily.json", dailyPayload); err != nil {
-		log.Printf("failed to save daily counts: %v", err)
-	}
 
 	changes := make([]Pixel, 0)
 	for key, px := range newDiff {
@@ -358,25 +355,14 @@ func (t *Tracker) processPixel(px Pixel) {
 		}
 	}
 
-	activityPayload, aErr := json.MarshalIndent(t.activity, "", "  ")
-	vandalPayload, vErr := json.MarshalIndent(t.vandalState, "", "  ")
+	t.dirtyActivity = true
+	t.dirtyVandalState = true
 	cb := t.newUserCB
 	var userCopy UserActivity
 	if shouldNotify {
 		userCopy = *entry
 	}
 	t.mu.Unlock()
-
-	if aErr != nil {
-		log.Printf("failed to marshal user activity: %v", aErr)
-	} else if err := t.writeFileAtomic("user_activity.json", activityPayload); err != nil {
-		log.Printf("failed to save user activity: %v", err)
-	}
-	if vErr != nil {
-		log.Printf("failed to marshal vandal state: %v", vErr)
-	} else if err := t.writeFileAtomic("vandalized_pixels.json", vandalPayload); err != nil {
-		log.Printf("failed to save vandal state: %v", err)
-	}
 
 	if shouldNotify && cb != nil {
 		cb(notifyKind, userCopy)
@@ -521,6 +507,88 @@ func (t *Tracker) saveActivitySnapshot() error {
 	return t.writeFileAtomic("user_activity.json", payload)
 }
 
+func (t *Tracker) flushWorker() {
+	ticker := time.NewTicker(stateFlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.ctx.Done():
+			t.flushDirtyState()
+			return
+		case <-ticker.C:
+			t.flushDirtyState()
+		}
+	}
+}
+
+func (t *Tracker) flushDirtyState() {
+	type filePayload struct {
+		name string
+		data []byte
+	}
+	payloads := make([]filePayload, 0, 3)
+
+	t.mu.Lock()
+	flushActivity := t.dirtyActivity
+	flushVandal := t.dirtyVandalState
+	flushDaily := t.dirtyDailyCounts
+
+	if flushActivity {
+		if data, err := json.MarshalIndent(t.activity, "", "  "); err != nil {
+			log.Printf("failed to marshal user activity: %v", err)
+		} else {
+			payloads = append(payloads, filePayload{name: "user_activity.json", data: data})
+			t.dirtyActivity = false
+		}
+	}
+	if flushVandal {
+		if data, err := json.MarshalIndent(t.vandalState, "", "  "); err != nil {
+			log.Printf("failed to marshal vandal state: %v", err)
+		} else {
+			payloads = append(payloads, filePayload{name: "vandalized_pixels.json", data: data})
+			t.dirtyVandalState = false
+		}
+	}
+	if flushDaily {
+		if data, err := json.MarshalIndent(t.dailyCounts, "", "  "); err != nil {
+			log.Printf("failed to marshal daily counts: %v", err)
+		} else {
+			payloads = append(payloads, filePayload{name: "vandal_daily.json", data: data})
+			t.dirtyDailyCounts = false
+		}
+	}
+	t.mu.Unlock()
+
+	for _, p := range payloads {
+		if err := t.writeFileAtomic(p.name, p.data); err != nil {
+			log.Printf("failed to save %s: %v", p.name, err)
+		}
+	}
+}
+
+func (t *Tracker) recentEventsGCWorker() {
+	ticker := time.NewTicker(recentEventsGCInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-ticker.C:
+			t.cleanupRecentEvents(time.Now().UTC())
+		}
+	}
+}
+
+func (t *Tracker) cleanupRecentEvents(now time.Time) {
+	cutoff := now.Add(-newUserNotifyWindow)
+	t.mu.Lock()
+	pruneRecentEventStore(t.recentVandalEvents, cutoff)
+	pruneRecentEventStore(t.recentFixEvents, cutoff)
+	t.mu.Unlock()
+}
+
 func (t *Tracker) writeFileAtomic(filename string, payload []byte) error {
 	if t.dataDir == "" {
 		return fmt.Errorf("dataDir is empty")
@@ -659,4 +727,22 @@ func recordRecentEvent(
 	events = events[:write]
 	store[userID] = events
 	return len(events)
+}
+
+func pruneRecentEventStore(store map[string][]time.Time, cutoff time.Time) {
+	for userID, events := range store {
+		write := 0
+		for _, ts := range events {
+			if ts.Before(cutoff) {
+				continue
+			}
+			events[write] = ts
+			write++
+		}
+		if write == 0 {
+			delete(store, userID)
+			continue
+		}
+		store[userID] = events[:write]
+	}
 }
