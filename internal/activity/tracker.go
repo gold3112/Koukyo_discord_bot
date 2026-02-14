@@ -114,6 +114,15 @@ type Tracker struct {
 
 type NewUserCallback func(kind string, user UserActivity)
 
+var activityDebugLogging = os.Getenv("ACTIVITY_DEBUG_LOG") == "1"
+
+func activityDebugf(format string, args ...interface{}) {
+	if !activityDebugLogging {
+		return
+	}
+	log.Printf(format, args...)
+}
+
 func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker {
 	ctx, cancel := context.WithCancel(context.Background())
 	queueSize := cfg.Width * cfg.Height
@@ -186,7 +195,7 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 		return err
 	}
 	bounds := img.Bounds()
-	log.Printf("activity diff image size: %dx%d", bounds.Dx(), bounds.Dy())
+	activityDebugf("activity diff image size: %dx%d", bounds.Dx(), bounds.Dy())
 	baseAbsX := t.cfg.TopLeftTileX*utils.WplaceTileSize + t.cfg.TopLeftPixelX
 	baseAbsY := t.cfg.TopLeftTileY*utils.WplaceTileSize + t.cfg.TopLeftPixelY
 
@@ -205,7 +214,7 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 			newDiff[key] = Pixel{AbsX: absX, AbsY: absY}
 		}
 	}
-	log.Printf("activity diff pixels detected: %d", nonZero)
+	activityDebugf("activity diff pixels detected: %d", nonZero)
 
 	t.mu.Lock()
 	oldDiff := t.currentDiff
@@ -242,7 +251,7 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 		}
 	}
 	if len(changes) == 0 {
-		log.Printf("activity diff changes: none")
+		activityDebugf("activity diff changes: none")
 	}
 
 	for _, px := range changes {
@@ -282,7 +291,7 @@ func (t *Tracker) processPixel(px Pixel) {
 	t.mu.Lock()
 	_, isDiff := t.currentDiff[key]
 	t.mu.Unlock()
-	log.Printf("activity process pixel: %s (isDiff=%t)", key, isDiff)
+	activityDebugf("activity process pixel: %s (isDiff=%t)", key, isDiff)
 
 	painter, err := t.fetchPainter(px)
 	if err != nil {
@@ -290,7 +299,7 @@ func (t *Tracker) processPixel(px Pixel) {
 		return
 	}
 	if painter == nil {
-		log.Printf("activity fetch painter: nil for %s", key)
+		activityDebugf("activity fetch painter: nil for %s", key)
 		return
 	}
 

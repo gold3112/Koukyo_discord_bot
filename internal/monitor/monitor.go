@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -15,21 +16,30 @@ import (
 
 const monitorReadTimeout = 60 * time.Second
 
+var monitorDebugLogging = os.Getenv("MONITOR_DEBUG_LOG") == "1"
+
+func monitorDebugf(format string, args ...interface{}) {
+	if !monitorDebugLogging {
+		return
+	}
+	log.Printf(format, args...)
+}
+
 // Monitor WebSocket監視クライアント
 type Monitor struct {
-	URL       string
-	State     *MonitorState
-	conn      *websocket.Conn
-	ctx       context.Context
-	cancel    context.CancelFunc
-	connected bool
-	mu        sync.RWMutex
-	writeMu   sync.Mutex
+	URL               string
+	State             *MonitorState
+	conn              *websocket.Conn
+	ctx               context.Context
+	cancel            context.CancelFunc
+	connected         bool
+	mu                sync.RWMutex
+	writeMu           sync.Mutex
 	reconnectMu       sync.Mutex
 	lastIdleReconnect time.Time
-	tracker   *activity.Tracker
-	lastMu    sync.Mutex
-	lastMsgAt time.Time
+	tracker           *activity.Tracker
+	lastMu            sync.Mutex
+	lastMsgAt         time.Time
 }
 
 // NewMonitor 新しいMonitorを作成
@@ -51,7 +61,7 @@ func (m *Monitor) SetActivityTracker(tracker *activity.Tracker) {
 
 // Connect WebSocketサーバーに接続
 func (m *Monitor) Connect() error {
-	log.Printf("Connecting to WebSocket: %s", m.URL)
+	monitorDebugf("Connecting to WebSocket: %s", m.URL)
 
 	m.mu.Lock()
 	if m.conn != nil {
@@ -222,7 +232,7 @@ func (m *Monitor) keepaliveLoop() {
 func (m *Monitor) idleWatchLoop() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	log.Printf("WebSocket idle watcher started")
+	monitorDebugf("WebSocket idle watcher started")
 
 	for {
 		select {
@@ -236,12 +246,12 @@ func (m *Monitor) idleWatchLoop() {
 			last := m.lastMsgAt
 			m.lastMu.Unlock()
 			if last.IsZero() {
-				log.Printf("WebSocket idle for 2s: no messages received (no last message)")
+				monitorDebugf("WebSocket idle for 2s: no messages received (no last message)")
 				continue
 			}
 			elapsed := time.Since(last)
 			if elapsed >= 2*time.Second {
-				log.Printf("WebSocket idle: no messages received for %s", elapsed.Round(time.Millisecond))
+				monitorDebugf("WebSocket idle: no messages received for %s", elapsed.Round(time.Millisecond))
 			}
 			// Emergency recovery: if the websocket doesn't deliver any monitoring data
 			// for a long time (even if pongs are flowing), force a reconnect.
@@ -274,7 +284,7 @@ func (m *Monitor) forceReconnectIfIdle() {
 	if conn != nil {
 		_ = conn.Close()
 	}
-	log.Printf("WebSocket idle >60s: forced reconnect triggered")
+	monitorDebugf("WebSocket idle >60s: forced reconnect triggered")
 }
 
 // handleMessage メッセージを処理
@@ -313,7 +323,7 @@ func (m *Monitor) handleTextMessage(message []byte) error {
 			return err
 		}
 		m.State.UpdateData(&data)
-		log.Printf("Updated: Diff=%.2f%%, Weighted=%.2f%%",
+		monitorDebugf("Updated: Diff=%.2f%%, Weighted=%.2f%%",
 			data.DiffPercentage,
 			getWeightedValue(data.WeightedDiffPercentage))
 	}
@@ -338,7 +348,7 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 	}
 	payload := message[headerSize : headerSize+payloadLen]
 
-	log.Printf("Received binary data: %d bytes, type_id=%d, payload_size=%d", len(message), typeID, payloadLen)
+	monitorDebugf("Received binary data: %d bytes, type_id=%d, payload_size=%d", len(message), typeID, payloadLen)
 
 	m.mu.RLock()
 	tracker := m.tracker
@@ -369,9 +379,9 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 		updated = true
 		// 最初の16バイトをログに出力してフォーマットを確認
 		if len(payloadCopy) >= 16 {
-			log.Printf("Stored live image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
+			monitorDebugf("Stored live image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
 		} else {
-			log.Printf("Stored live image: %d bytes", len(payloadCopy))
+			monitorDebugf("Stored live image: %d bytes", len(payloadCopy))
 		}
 	case 3: // Diff image
 		// 先頭に余分な00バイトがある場合は削除
@@ -384,13 +394,13 @@ func (m *Monitor) handleBinaryMessage(message []byte) error {
 		if tracker != nil && !powerSave {
 			tracker.EnqueueDiffImage(payloadCopy)
 		} else if tracker != nil {
-			log.Printf("activity tracker skipped: power_save_mode=true")
+			monitorDebugf("activity tracker skipped: power_save_mode=true")
 		}
 		// 最初の16バイトをログに出力してフォーマットを確認
 		if len(payloadCopy) >= 16 {
-			log.Printf("Stored diff image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
+			monitorDebugf("Stored diff image: %d bytes, header: %X", len(payloadCopy), payloadCopy[:16])
 		} else {
-			log.Printf("Stored diff image: %d bytes", len(payloadCopy))
+			monitorDebugf("Stored diff image: %d bytes", len(payloadCopy))
 		}
 	default:
 		log.Printf("Unknown binary type_id: %d", typeID)
