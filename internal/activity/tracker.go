@@ -63,6 +63,8 @@ type UserActivity struct {
 	DailyRestoredCounts map[string]int `json:"daily_restored_counts,omitempty"`
 	DailyActivityScores map[string]int `json:"daily_activity_scores,omitempty"`
 	LastPixel           *PixelRef      `json:"last_pixel,omitempty"`
+	VandalNotified      bool           `json:"vandal_notified,omitempty"`
+	FixNotified         bool           `json:"fix_notified,omitempty"`
 }
 
 type VandalState struct {
@@ -74,6 +76,11 @@ type DailyPixelCounts struct {
 	Vandal map[string]int `json:"vandal"`
 	Fix    map[string]int `json:"fix"`
 }
+
+const (
+	newUserNotifyThreshold = 5
+	newUserNotifyWindow    = 5 * time.Minute
+)
 
 type Tracker struct {
 	cfg          Config
@@ -93,6 +100,9 @@ type Tracker struct {
 	dailyCounts  DailyPixelCounts
 	backoffDelay time.Duration
 	backoffUntil time.Time
+	// Recent event windows for "N actions within 5 minutes" detection.
+	recentVandalEvents map[string][]time.Time
+	recentFixEvents    map[string][]time.Time
 }
 
 type NewUserCallback func(kind string, user UserActivity)
@@ -105,19 +115,21 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 	}
 	diffQueueSize := 1
 	t := &Tracker{
-		cfg:          cfg,
-		limiter:      limiter,
-		dataDir:      dataDir,
-		httpClient:   NewPixelHTTPClient(),
-		queue:        make(chan Pixel, queueSize),
-		pending:      make(map[string]Pixel),
-		diffQueue:    make(chan []byte, diffQueueSize),
-		ctx:          ctx,
-		cancel:       cancel,
-		currentDiff:  make(map[string]Pixel),
-		activity:     make(map[string]*UserActivity),
-		vandalState:  VandalState{PixelToPainter: make(map[string]string)},
-		backoffDelay: 2 * time.Second,
+		cfg:                cfg,
+		limiter:            limiter,
+		dataDir:            dataDir,
+		httpClient:         NewPixelHTTPClient(),
+		queue:              make(chan Pixel, queueSize),
+		pending:            make(map[string]Pixel),
+		diffQueue:          make(chan []byte, diffQueueSize),
+		ctx:                ctx,
+		cancel:             cancel,
+		currentDiff:        make(map[string]Pixel),
+		activity:           make(map[string]*UserActivity),
+		vandalState:        VandalState{PixelToPainter: make(map[string]string)},
+		backoffDelay:       2 * time.Second,
+		recentVandalEvents: make(map[string][]time.Time),
+		recentFixEvents:    make(map[string][]time.Time),
 	}
 	t.loadState()
 	t.loadDailyCounts()
@@ -326,9 +338,11 @@ func (t *Tracker) processPixel(px Pixel) {
 		entry.ActivityScore--
 		entry.DailyActivityScores[dateKey]--
 		t.vandalState.PixelToPainter[key] = painterID
-		if entry.VandalCount == 5 {
+		windowCount := recordRecentEvent(t.recentVandalEvents, painterID, now, newUserNotifyWindow)
+		if !entry.VandalNotified && windowCount >= newUserNotifyThreshold {
 			notifyKind = "vandal"
 			shouldNotify = true
+			entry.VandalNotified = true
 		}
 	} else {
 		entry.RestoredCount++
@@ -336,9 +350,11 @@ func (t *Tracker) processPixel(px Pixel) {
 		entry.ActivityScore++
 		entry.DailyActivityScores[dateKey]++
 		delete(t.vandalState.PixelToPainter, key)
-		if entry.RestoredCount == 5 {
+		windowCount := recordRecentEvent(t.recentFixEvents, painterID, now, newUserNotifyWindow)
+		if !entry.FixNotified && windowCount >= newUserNotifyThreshold {
 			notifyKind = "fix"
 			shouldNotify = true
+			entry.FixNotified = true
 		}
 	}
 
@@ -446,14 +462,22 @@ func (t *Tracker) loadState() {
 				ensureActivityMaps(entry)
 				entry.ActivityScore = expectedScore
 				entry.DailyActivityScores = buildDailyActivityScores(entry)
+				if entry.VandalCount >= newUserNotifyThreshold && !entry.VandalNotified {
+					entry.VandalNotified = true
+					dirty = true
+				}
+				if entry.RestoredCount >= newUserNotifyThreshold && !entry.FixNotified {
+					entry.FixNotified = true
+					dirty = true
+				}
 			}
 			t.activity = entries
 			if dirty {
-			if err := t.saveActivitySnapshot(); err != nil {
-				log.Printf("failed to migrate user activity: %v", err)
+				if err := t.saveActivitySnapshot(); err != nil {
+					log.Printf("failed to migrate user activity: %v", err)
+				}
 			}
 		}
-	}
 	}
 
 	vandalPath := filepath.Join(t.dataDir, "vandalized_pixels.json")
@@ -614,4 +638,25 @@ func dateKeyJST() string {
 
 func pixelKey(x, y int) string {
 	return fmt.Sprintf("(%d, %d)", x, y)
+}
+
+func recordRecentEvent(
+	store map[string][]time.Time,
+	userID string,
+	now time.Time,
+	window time.Duration,
+) int {
+	events := append(store[userID], now)
+	cutoff := now.Add(-window)
+	write := 0
+	for _, ts := range events {
+		if ts.Before(cutoff) {
+			continue
+		}
+		events[write] = ts
+		write++
+	}
+	events = events[:write]
+	store[userID] = events
+	return len(events)
 }

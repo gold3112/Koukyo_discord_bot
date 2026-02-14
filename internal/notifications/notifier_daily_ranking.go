@@ -2,7 +2,6 @@ package notifications
 
 import (
 	"Koukyo_discord_bot/internal/activity"
-	"Koukyo_discord_bot/internal/monitor"
 	"Koukyo_discord_bot/internal/utils"
 	"bytes"
 	"encoding/json"
@@ -239,58 +238,44 @@ func (n *Notifier) buildDailyDiffSummary(dateKey string, jst *time.Location) str
 		return "監視データなし"
 	}
 
-	overall := n.monitor.State.GetDiffHistory(48*time.Hour, false)
-	weighted := n.monitor.State.GetDiffHistory(48*time.Hour, true)
+	summary, ok := n.monitor.State.GetDailySummary(dateKey)
+	if !ok {
+		return strings.Join([]string{
+			"最新差分率: N/A",
+			"最大差分率: N/A",
+			"最小差分率: N/A",
+			"平均差分率: N/A",
+			"記録数: 0",
+		}, "\n")
+	}
+	overall := summary.Overall
+	weighted := summary.Weighted
 
-	latestOverall, maxOverall, minOverall, avgOverall, peakOverall, countOverall := dayStats(overall, dateKey, jst)
-	latestWeighted, maxWeighted, minWeighted, avgWeighted, peakWeighted, countWeighted := dayStats(weighted, dateKey, jst)
+	avgOverall := 0.0
+	if overall.Count > 0 {
+		avgOverall = overall.Sum / float64(overall.Count)
+	}
+	avgWeighted := 0.0
+	if weighted.Count > 0 {
+		avgWeighted = weighted.Sum / float64(weighted.Count)
+	}
 
 	lines := []string{
-		fmt.Sprintf("最新差分率: %s", formatPercent(latestOverall, countOverall > 0)),
-		fmt.Sprintf("最大差分率: %s %s", formatPercent(maxOverall, countOverall > 0), formatTimeJST(peakOverall, countOverall > 0, jst)),
-		fmt.Sprintf("最小差分率: %s", formatPercent(minOverall, countOverall > 0)),
-		fmt.Sprintf("平均差分率: %s", formatPercent(avgOverall, countOverall > 0)),
-		fmt.Sprintf("記録数: %d", countOverall),
+		fmt.Sprintf("最新差分率: %s", formatPercent(overall.Latest, overall.Count > 0)),
+		fmt.Sprintf("最大差分率: %s %s", formatPercent(overall.Max, overall.Count > 0), formatTimeJST(overall.PeakAt, overall.Count > 0, jst)),
+		fmt.Sprintf("最小差分率: %s", formatPercent(overall.Min, overall.Count > 0)),
+		fmt.Sprintf("平均差分率: %s", formatPercent(avgOverall, overall.Count > 0)),
+		fmt.Sprintf("記録数: %d", overall.Count),
 	}
-	if countWeighted > 0 {
+	if weighted.Count > 0 {
 		lines = append(lines,
-			fmt.Sprintf("最新加重差分率: %s", formatPercent(latestWeighted, true)),
-			fmt.Sprintf("最大加重差分率: %s %s", formatPercent(maxWeighted, true), formatTimeJST(peakWeighted, true, jst)),
-			fmt.Sprintf("最小加重差分率: %s", formatPercent(minWeighted, true)),
+			fmt.Sprintf("最新加重差分率: %s", formatPercent(weighted.Latest, true)),
+			fmt.Sprintf("最大加重差分率: %s %s", formatPercent(weighted.Max, true), formatTimeJST(weighted.PeakAt, true, jst)),
+			fmt.Sprintf("最小加重差分率: %s", formatPercent(weighted.Min, true)),
 			fmt.Sprintf("平均加重差分率: %s", formatPercent(avgWeighted, true)),
 		)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func dayStats(records []monitor.DiffRecord, dateKey string, jst *time.Location) (latest, max, min, avg float64, peak time.Time, count int) {
-	var latestTime time.Time
-	var sum float64
-	for _, r := range records {
-		if r.Timestamp.IsZero() {
-			continue
-		}
-		if r.Timestamp.In(jst).Format("2006-01-02") != dateKey {
-			continue
-		}
-		count++
-		sum += r.Percentage
-		if latestTime.IsZero() || r.Timestamp.After(latestTime) {
-			latestTime = r.Timestamp
-			latest = r.Percentage
-		}
-		if count == 1 || r.Percentage > max {
-			max = r.Percentage
-			peak = r.Timestamp
-		}
-		if count == 1 || r.Percentage < min {
-			min = r.Percentage
-		}
-	}
-	if count > 0 {
-		avg = sum / float64(count)
-	}
-	return latest, max, min, avg, peak, count
 }
 
 func formatPercent(value float64, ok bool) string {

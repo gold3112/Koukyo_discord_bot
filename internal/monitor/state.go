@@ -71,14 +71,33 @@ type MonitorState struct {
 	DailyPeakDiff      float64
 	DailyPeakAt        time.Time
 	DailyPeakDiffImage []byte
-	heatmapQueue       chan []byte
-	mu                 sync.RWMutex
+	// Daily diff summary tracking (JST)
+	DailySummaries map[string]DailySummary
+	heatmapQueue   chan []byte
+	mu             sync.RWMutex
 }
 
 // DiffRecord 差分履歴のレコード
 type DiffRecord struct {
 	Timestamp  time.Time
 	Percentage float64
+}
+
+// DailyMetricSummary represents per-day aggregate values for one metric.
+type DailyMetricSummary struct {
+	Latest   float64
+	LatestAt time.Time
+	Max      float64
+	Min      float64
+	Sum      float64
+	PeakAt   time.Time
+	Count    int
+}
+
+// DailySummary represents per-day aggregates for overall/weighted diff.
+type DailySummary struct {
+	Overall  DailyMetricSummary
+	Weighted DailyMetricSummary
 }
 
 // TimelapseFrame タイムラプスのフレーム（差分/ライブ画像を保持）
@@ -102,6 +121,7 @@ func NewMonitorState() *MonitorState {
 		WeightedDiffHistory: ring.New(historyLimit),
 		PowerSaveMode:       false,
 		heatmapQueue:        make(chan []byte, 1),
+		DailySummaries:      make(map[string]DailySummary),
 	}
 	ms.startHeatmapWorker()
 	return ms
@@ -114,6 +134,7 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 
 	data.Timestamp = time.Now()
 	ms.LatestData = data
+	ms.updateDailySummaryLocked(data)
 
 	// 基準ピクセル数の更新
 	if data.ChrysanthemumTotalPixels > 0 {
@@ -135,7 +156,6 @@ func (ms *MonitorState) UpdateData(data *MonitorData) {
 			elapsed := time.Since(*ms.ZeroDiffStartTime)
 			if elapsed >= 10*time.Minute {
 				ms.PowerSaveMode = true
-				ms.resetDiffHistoryLocked()
 			}
 		}
 	} else {
@@ -497,4 +517,54 @@ func (ms *MonitorState) GetDailyPeakDiffImage(dateKey string) (img []byte, peakA
 	}
 	cp := append([]byte(nil), ms.DailyPeakDiffImage...)
 	return cp, ms.DailyPeakAt, ms.DailyPeakDiff, true
+}
+
+// GetDailySummary returns aggregate diff summary for the given JST date key.
+func (ms *MonitorState) GetDailySummary(dateKey string) (summary DailySummary, ok bool) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	summary, ok = ms.DailySummaries[dateKey]
+	return summary, ok
+}
+
+func (ms *MonitorState) updateDailySummaryLocked(data *MonitorData) {
+	if data == nil || data.Timestamp.IsZero() {
+		return
+	}
+
+	jst := time.FixedZone("JST", 9*3600)
+	dateKey := data.Timestamp.In(jst).Format("2006-01-02")
+
+	summary := ms.DailySummaries[dateKey]
+	summary.Overall = updateDailyMetric(summary.Overall, data.Timestamp, data.DiffPercentage)
+	if data.WeightedDiffPercentage != nil {
+		summary.Weighted = updateDailyMetric(summary.Weighted, data.Timestamp, *data.WeightedDiffPercentage)
+	}
+	ms.DailySummaries[dateKey] = summary
+
+	// Keep memory bounded: preserve only recent 7 JST days.
+	cutoff := data.Timestamp.In(jst).AddDate(0, 0, -7)
+	for key := range ms.DailySummaries {
+		day, err := time.ParseInLocation("2006-01-02", key, jst)
+		if err != nil || day.Before(cutoff) {
+			delete(ms.DailySummaries, key)
+		}
+	}
+}
+
+func updateDailyMetric(metric DailyMetricSummary, ts time.Time, value float64) DailyMetricSummary {
+	if metric.Count == 0 || ts.After(metric.LatestAt) {
+		metric.Latest = value
+		metric.LatestAt = ts
+	}
+	if metric.Count == 0 || value > metric.Max {
+		metric.Max = value
+		metric.PeakAt = ts
+	}
+	if metric.Count == 0 || value < metric.Min {
+		metric.Min = value
+	}
+	metric.Sum += value
+	metric.Count++
+	return metric
 }
