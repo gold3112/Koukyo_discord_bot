@@ -78,10 +78,10 @@ type DailyPixelCounts struct {
 }
 
 const (
-	newUserNotifyThreshold = 5
-	newUserNotifyWindow    = 5 * time.Minute
-	stateFlushInterval     = 2 * time.Second
-	recentEventsGCInterval = 1 * time.Minute
+	newUserNotifyThreshold      = 5
+	newUserNotifyWindow         = 5 * time.Minute
+	defaultStateFlushInterval   = 10 * time.Second
+	defaultRecentEventsInterval = 1 * time.Minute
 )
 
 type Tracker struct {
@@ -108,6 +108,8 @@ type Tracker struct {
 	dirtyActivity      bool
 	dirtyVandalState   bool
 	dirtyDailyCounts   bool
+	flushInterval      time.Duration
+	recentGCInterval   time.Duration
 }
 
 type NewUserCallback func(kind string, user UserActivity)
@@ -135,6 +137,8 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 		backoffDelay:       2 * time.Second,
 		recentVandalEvents: make(map[string][]time.Time),
 		recentFixEvents:    make(map[string][]time.Time),
+		flushInterval:      loadDurationFromEnv("ACTIVITY_FLUSH_INTERVAL_SECONDS", defaultStateFlushInterval, time.Second, 10*time.Minute),
+		recentGCInterval:   loadDurationFromEnv("ACTIVITY_RECENT_GC_INTERVAL_SECONDS", defaultRecentEventsInterval, 10*time.Second, 10*time.Minute),
 	}
 	t.loadState()
 	t.loadDailyCounts()
@@ -508,7 +512,7 @@ func (t *Tracker) saveActivitySnapshot() error {
 }
 
 func (t *Tracker) flushWorker() {
-	ticker := time.NewTicker(stateFlushInterval)
+	ticker := time.NewTicker(t.flushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -568,7 +572,7 @@ func (t *Tracker) flushDirtyState() {
 }
 
 func (t *Tracker) recentEventsGCWorker() {
-	ticker := time.NewTicker(recentEventsGCInterval)
+	ticker := time.NewTicker(t.recentGCInterval)
 	defer ticker.Stop()
 
 	for {
@@ -745,4 +749,29 @@ func pruneRecentEventStore(store map[string][]time.Time, cutoff time.Time) {
 		}
 		store[userID] = events[:write]
 	}
+}
+
+func loadDurationFromEnv(
+	envKey string,
+	defaultValue time.Duration,
+	minValue time.Duration,
+	maxValue time.Duration,
+) time.Duration {
+	raw := os.Getenv(envKey)
+	if raw == "" {
+		return defaultValue
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("invalid %s=%q: %v", envKey, raw, err)
+		return defaultValue
+	}
+	d := time.Duration(seconds) * time.Second
+	if d < minValue {
+		return minValue
+	}
+	if d > maxValue {
+		return maxValue
+	}
+	return d
 }
