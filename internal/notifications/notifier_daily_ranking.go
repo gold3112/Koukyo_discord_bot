@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"Koukyo_discord_bot/internal/activity"
+	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/utils"
 	"bytes"
 	"encoding/json"
@@ -73,7 +74,8 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 	summaryText := n.buildDailyDiffSummary(dateKey, jst)
 
 	titleDate := reportTime.In(jst).Format("2006-01-02 (JST)")
-	peakDiffImage, _, _, peakOK := n.monitor.State.GetDailyPeakDiffImage(dateKey)
+	peakLiveImage, peakDiffImage, _, _, peakOK := n.monitor.State.GetDailyPeakImages(dateKey)
+	peakFiles, peakAttachmentName := buildPeakImageFile(peakLiveImage, peakDiffImage, peakOK)
 	embed := buildDailyRankingEmbed(titleDate, summaryText, vandalText, restoreText, activityText, "")
 
 	for _, guild := range n.session.State.Guilds {
@@ -83,13 +85,13 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 		}
 		msg, err := n.session.ChannelMessageSendComplex(*gs.NotificationChannel, &discordgo.MessageSend{
 			Embeds: []*discordgo.MessageEmbed{embed},
-			Files:  buildPeakDiffFile(peakDiffImage, peakOK),
+			Files:  peakFiles,
 		})
 		if err != nil {
 			log.Printf("Failed to send daily ranking to guild %s: %v", guild.ID, err)
 			continue
 		}
-		if peakOK && len(msg.Attachments) > 0 {
+		if peakAttachmentName != "" && len(msg.Attachments) > 0 {
 			link := msg.Attachments[0].URL
 			updated := buildDailyRankingEmbed(titleDate, summaryText, vandalText, restoreText, activityText, link)
 			if _, err := n.session.ChannelMessageEditComplex(&discordgo.MessageEdit{
@@ -170,15 +172,30 @@ func buildDailyRankingEmbed(titleDate, summaryText, vandalText, restoreText, act
 	}
 }
 
-func buildPeakDiffFile(img []byte, ok bool) []*discordgo.File {
-	if !ok || len(img) == 0 {
-		return nil
+func buildPeakImageFile(liveImg, diffImg []byte, ok bool) ([]*discordgo.File, string) {
+	if !ok || len(diffImg) == 0 {
+		return nil, ""
 	}
+
+	if len(liveImg) > 0 {
+		combined, err := embeds.CombineImages(liveImg, diffImg)
+		if err == nil {
+			name := "daily_peak_combined.png"
+			return []*discordgo.File{{
+				Name:        name,
+				ContentType: "image/png",
+				Reader:      combined,
+			}}, name
+		}
+		log.Printf("Failed to combine daily peak images: %v", err)
+	}
+
+	name := "daily_peak_diff.png"
 	return []*discordgo.File{{
-		Name:        "daily_peak_diff.png",
+		Name:        name,
 		ContentType: "image/png",
-		Reader:      bytes.NewReader(img),
-	}}
+		Reader:      bytes.NewReader(diffImg),
+	}}, name
 }
 
 func buildRanking(entries map[string]*activity.UserActivity, dateKey string, vandal bool) []rankingEntry {

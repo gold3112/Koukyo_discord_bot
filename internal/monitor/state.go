@@ -70,6 +70,7 @@ type MonitorState struct {
 	DailyPeakDate      string
 	DailyPeakDiff      float64
 	DailyPeakAt        time.Time
+	DailyPeakLiveImage []byte
 	DailyPeakDiffImage []byte
 	// Daily diff summary tracking (JST)
 	DailySummaries map[string]DailySummary
@@ -233,10 +234,13 @@ func (ms *MonitorState) UpdateImages(images *ImageData) {
 			ms.DailyPeakDate = dateKey
 			ms.DailyPeakDiff = 0
 			ms.DailyPeakAt = time.Time{}
+			ms.DailyPeakLiveImage = nil
 			ms.DailyPeakDiffImage = nil
 		}
 		if ms.DailyPeakDiffImage == nil || ms.LatestData.DiffPercentage >= ms.DailyPeakDiff {
+			liveCopy := append([]byte(nil), images.LiveImage...)
 			diffCopy := append([]byte(nil), images.DiffImage...)
+			ms.DailyPeakLiveImage = liveCopy
 			ms.DailyPeakDiffImage = diffCopy
 			ms.DailyPeakDiff = ms.LatestData.DiffPercentage
 			ms.DailyPeakAt = ts
@@ -517,6 +521,18 @@ func (ms *MonitorState) GetDailyPeakDiffImage(dateKey string) (img []byte, peakA
 	}
 	cp := append([]byte(nil), ms.DailyPeakDiffImage...)
 	return cp, ms.DailyPeakAt, ms.DailyPeakDiff, true
+}
+
+// GetDailyPeakImages returns live+diff images captured at the daily peak (JST).
+func (ms *MonitorState) GetDailyPeakImages(dateKey string) (live []byte, diff []byte, peakAt time.Time, peakValue float64, ok bool) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	if ms.DailyPeakDate != dateKey || len(ms.DailyPeakDiffImage) == 0 {
+		return nil, nil, time.Time{}, 0, false
+	}
+	liveCopy := append([]byte(nil), ms.DailyPeakLiveImage...)
+	diffCopy := append([]byte(nil), ms.DailyPeakDiffImage...)
+	return liveCopy, diffCopy, ms.DailyPeakAt, ms.DailyPeakDiff, true
 }
 
 // GetDailySummary returns aggregate diff summary for the given JST date key.
