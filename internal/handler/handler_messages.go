@@ -13,14 +13,10 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	log.Printf("Message received: '%s' from %s", m.Content, m.Author.Username)
-
 	// プレフィックスチェック
 	if !strings.HasPrefix(m.Content, h.prefix) {
 		return
 	}
-
-	log.Println("Prefix matched!")
 
 	// コマンドと引数をパース
 	content := strings.TrimPrefix(m.Content, h.prefix)
@@ -29,24 +25,15 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	cmdName := parts[0]
+	cmdName := strings.ToLower(parts[0])
 	args := parts[1:]
 
-	log.Printf("Parsed command: '%s', args: %v", cmdName, args)
+	log.Printf("Text command received: %s (args=%d) from %s", cmdName, len(args), m.Author.Username)
 
 	// コマンド実行
 	cmd, exists := h.registry.Get(cmdName)
 	if !exists {
-		if h.handleProgressTargetManual(s, m, cmdName) {
-			return
-		}
-		if h.handleWatchTargetManual(s, m, cmdName) {
-			return
-		}
-		if h.handleGetShortcut(s, m, cmdName) {
-			return
-		}
-		if h.handleEasterEgg(s, m, cmdName) {
+		if h.handleUnknownTextCommand(s, m, cmdName) {
 			return
 		}
 		log.Printf("Command '%s' not found in registry", cmdName)
@@ -60,4 +47,19 @@ func (h *Handler) OnMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	} else {
 		log.Printf("Command %s completed successfully", cmdName)
 	}
+}
+
+func (h *Handler) handleUnknownTextCommand(s *discordgo.Session, m *discordgo.MessageCreate, cmdName string) bool {
+	fallbacks := []func(*discordgo.Session, *discordgo.MessageCreate, string) bool{
+		h.handleProgressTargetManual,
+		h.handleWatchTargetManual,
+		h.handleGetShortcut,
+		h.handleEasterEgg,
+	}
+	for _, handler := range fallbacks {
+		if handler(s, m, cmdName) {
+			return true
+		}
+	}
+	return false
 }

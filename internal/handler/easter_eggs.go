@@ -5,63 +5,43 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
 	"Koukyo_discord_bot/internal/eastereggs"
 
 	"github.com/bwmarrin/discordgo"
 )
 
+const easterEggCacheTTL = 1 * time.Minute
+
+type easterEggCache struct {
+	mu        sync.Mutex
+	eggs      map[string]eggConfig
+	aliases   map[string]eggConfig
+	fetchedAt time.Time
+}
+
+var globalEasterEggCache easterEggCache
+
 func (h *Handler) handleEasterEgg(s *discordgo.Session, m *discordgo.MessageCreate, cmdName string) bool {
 	if reply, ok := eastereggs.HandleSleepyHeresy(m.Content, m.GuildID, m.Author.ID); ok {
-		if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
-			log.Printf("Failed to send easter egg response: %v", err)
-		}
-		return true
+		return sendEasterEggReply(s, m.ChannelID, reply)
 	}
 	if replies, ok := eastereggs.HandleSleepyboard(cmdName, m.GuildID, m.Author.ID); ok {
 		for _, reply := range replies {
-			if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
-				log.Printf("Failed to send easter egg response: %v", err)
-			}
+			sendEasterEggReply(s, m.ChannelID, reply)
 		}
 		return true
 	}
 	if reply, ok := eastereggs.RandomReply(cmdName); ok {
-		if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
-			log.Printf("Failed to send easter egg response: %v", err)
-		}
-		return true
+		return sendEasterEggReply(s, m.ChannelID, reply)
 	}
 	if h.dataDir == "" {
 		return false
 	}
-	path := filepath.Join(h.dataDir, "easter_eggs.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	if len(data) == 0 {
-		return false
-	}
-
-	var eggs map[string]eggConfig
-	if err := json.Unmarshal(data, &eggs); err != nil {
-		log.Printf("Failed to parse easter_eggs.json: %v", err)
-		return false
-	}
-	cfg, ok := eggs[cmdName]
-	if !ok {
-		for _, candidate := range eggs {
-			if len(candidate.Aliases) == 0 {
-				continue
-			}
-			if hasAlias(candidate.Aliases, cmdName) {
-				cfg = candidate
-				ok = true
-				break
-			}
-		}
-	}
+	cfg, ok := loadEasterEggConfig(h.dataDir, cmdName)
 	if !ok || (cfg.Reply == "" && len(cfg.Choices) == 0) {
 		return false
 	}
@@ -79,10 +59,7 @@ func (h *Handler) handleEasterEgg(s *discordgo.Session, m *discordgo.MessageCrea
 		reply = chosen
 	}
 
-	if _, err := s.ChannelMessageSend(m.ChannelID, reply); err != nil {
-		log.Printf("Failed to send easter egg response: %v", err)
-	}
-	return true
+	return sendEasterEggReply(s, m.ChannelID, reply)
 }
 
 type eggConfig struct {
@@ -120,11 +97,70 @@ func (c *eggConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func hasAlias(aliases []string, cmdName string) bool {
-	for _, alias := range aliases {
-		if alias == cmdName {
-			return true
+func sendEasterEggReply(s *discordgo.Session, channelID, reply string) bool {
+	if _, err := s.ChannelMessageSend(channelID, reply); err != nil {
+		log.Printf("Failed to send easter egg response: %v", err)
+		return false
+	}
+	return true
+}
+
+func loadEasterEggConfig(dataDir, cmdName string) (eggConfig, bool) {
+	eggs, aliases, ok := loadEasterEggConfigs(dataDir)
+	if !ok {
+		return eggConfig{}, false
+	}
+
+	loweredCmdName := strings.ToLower(cmdName)
+	if cfg, exists := eggs[loweredCmdName]; exists {
+		return cfg, true
+	}
+	cfg, exists := aliases[loweredCmdName]
+	return cfg, exists
+}
+
+func loadEasterEggConfigs(dataDir string) (map[string]eggConfig, map[string]eggConfig, bool) {
+	globalEasterEggCache.mu.Lock()
+	defer globalEasterEggCache.mu.Unlock()
+
+	if globalEasterEggCache.eggs != nil &&
+		time.Since(globalEasterEggCache.fetchedAt) < easterEggCacheTTL {
+		return globalEasterEggCache.eggs, globalEasterEggCache.aliases, true
+	}
+
+	path := filepath.Join(dataDir, "easter_eggs.json")
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return nil, nil, false
+	}
+
+	raw := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		log.Printf("Failed to parse easter_eggs.json: %v", err)
+		return nil, nil, false
+	}
+
+	eggs := make(map[string]eggConfig, len(raw))
+	aliases := make(map[string]eggConfig)
+	for key, blob := range raw {
+		cfg := eggConfig{}
+		if err := cfg.UnmarshalJSON(blob); err != nil {
+			log.Printf("Failed to parse easter_eggs.json entry %s: %v", key, err)
+			continue
+		}
+		normalizedKey := strings.ToLower(key)
+		eggs[normalizedKey] = cfg
+		for _, alias := range cfg.Aliases {
+			aliases[strings.ToLower(alias)] = cfg
 		}
 	}
-	return false
+
+	if len(eggs) == 0 {
+		return nil, nil, false
+	}
+
+	globalEasterEggCache.eggs = eggs
+	globalEasterEggCache.aliases = aliases
+	globalEasterEggCache.fetchedAt = time.Now()
+	return eggs, aliases, true
 }

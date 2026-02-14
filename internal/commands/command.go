@@ -1,6 +1,10 @@
 package commands
 
-import "github.com/bwmarrin/discordgo"
+import (
+	"strings"
+
+	"github.com/bwmarrin/discordgo"
+)
 
 // Command 統合コマンドインターフェース
 type Command interface {
@@ -28,12 +32,12 @@ func NewRegistry() *Registry {
 
 // Register コマンドを登録
 func (r *Registry) Register(cmd Command) {
-	r.commands[cmd.Name()] = cmd
+	r.commands[strings.ToLower(cmd.Name())] = cmd
 }
 
 // Get コマンドを取得
 func (r *Registry) Get(name string) (Command, bool) {
-	cmd, exists := r.commands[name]
+	cmd, exists := r.commands[strings.ToLower(name)]
 	return cmd, exists
 }
 

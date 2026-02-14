@@ -56,44 +56,71 @@ func (h *Handler) handleMessageComponent(s *discordgo.Session, i *discordgo.Inte
 	customID := i.MessageComponentData().CustomID
 	log.Printf("Message component: %s", customID)
 
-	// 設定パネルのボタン
-	if strings.HasPrefix(customID, "settings_") {
-		commands.HandleSettingsButtonInteraction(s, i, h.settings, h.notifier)
-		return
+	componentHandlers := []struct {
+		match  func(string) bool
+		handle func()
+	}{
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "settings_") },
+			handle: func() {
+				commands.HandleSettingsButtonInteraction(s, i, h.settings, h.notifier)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "select_") },
+			handle: func() {
+				commands.HandleSettingsSelectMenu(s, i, h.settings)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "userlist:") },
+			handle: func() {
+				commands.HandleUserListPagination(s, i, h.dataDir)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "useractivity:") },
+			handle: func() {
+				commands.HandleUserActivityPagination(s, i, h.dataDir)
+			},
+		},
+		{
+			match: func(id string) bool { return id == "useractivity_select" },
+			handle: func() {
+				commands.HandleUserActivitySelect(s, i, h.dataDir)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "regionmap_page:") },
+			handle: func() {
+				commands.HandleRegionMapPagination(s, i)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "regionmap_select:") },
+			handle: func() {
+				commands.HandleRegionMapSelect(s, i)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "regionmap_confirm:") },
+			handle: func() {
+				commands.HandleRegionMapConfirm(s, i, h.limiter)
+			},
+		},
+		{
+			match: func(id string) bool { return strings.HasPrefix(id, "explanation_page:") },
+			handle: func() {
+				commands.HandleExplanationPagination(s, i)
+			},
+		},
 	}
 
-	// 設定パネルのセレクトメニュー
-	if strings.HasPrefix(customID, "select_") {
-		commands.HandleSettingsSelectMenu(s, i, h.settings)
-		return
-	}
-	if strings.HasPrefix(customID, "userlist:") {
-		commands.HandleUserListPagination(s, i, h.dataDir)
-		return
-	}
-	if strings.HasPrefix(customID, "useractivity:") {
-		commands.HandleUserActivityPagination(s, i, h.dataDir)
-		return
-	}
-	if customID == "useractivity_select" {
-		commands.HandleUserActivitySelect(s, i, h.dataDir)
-		return
-	}
-	if strings.HasPrefix(customID, "regionmap_page:") {
-		commands.HandleRegionMapPagination(s, i)
-		return
-	}
-	if strings.HasPrefix(customID, "regionmap_select:") {
-		commands.HandleRegionMapSelect(s, i)
-		return
-	}
-	if strings.HasPrefix(customID, "regionmap_confirm:") {
-		commands.HandleRegionMapConfirm(s, i, h.limiter)
-		return
-	}
-	if strings.HasPrefix(customID, "explanation_page:") {
-		commands.HandleExplanationPagination(s, i)
-		return
+	for _, handler := range componentHandlers {
+		if handler.match(customID) {
+			handler.handle()
+			return
+		}
 	}
 
 	log.Printf("Unknown message component: %s", customID)
