@@ -13,6 +13,7 @@ const (
 	standaloneTriggerAfter = 1 * time.Minute
 	standaloneBaseInterval = 15 * time.Second
 	standaloneMaxInterval  = 5 * time.Minute
+	standaloneErrorNotifyEvery = 10 * time.Minute
 )
 
 func (n *Notifier) maybeRunStandaloneFallback(now time.Time) {
@@ -21,9 +22,11 @@ func (n *Notifier) maybeRunStandaloneFallback(now time.Time) {
 	}
 
 	if !n.monitor.IsWSUnavailableFor(standaloneTriggerAfter) {
-		n.resetStandaloneSchedule()
+		n.leaveStandaloneFallbackIfActive(now)
+		n.resetStandaloneScheduleLocked()
 		return
 	}
+	n.enterStandaloneFallbackIfNeeded(now)
 
 	n.standaloneMu.Lock()
 	if !n.standaloneNextRun.IsZero() && now.Before(n.standaloneNextRun) {
@@ -34,14 +37,14 @@ func (n *Notifier) maybeRunStandaloneFallback(now time.Time) {
 
 	cfg, err := n.resolveStandaloneTarget()
 	if err != nil {
-		n.scheduleStandaloneFailure(now)
+		n.scheduleStandaloneFailure(now, err)
 		log.Printf("standalone fallback: target resolve failed: %v", err)
 		return
 	}
 
 	result, err := n.buildWatchTargetResult(cfg)
 	if err != nil {
-		n.scheduleStandaloneFailure(now)
+		n.scheduleStandaloneFailure(now, err)
 		log.Printf("standalone fallback: build failed target=%s err=%v", cfg.ID, err)
 		return
 	}
@@ -92,14 +95,20 @@ func (n *Notifier) resolveStandaloneTarget() (watchTargetConfig, error) {
 	}, nil
 }
 
-func (n *Notifier) resetStandaloneSchedule() {
+func (n *Notifier) resetStandaloneScheduleLocked() {
 	n.standaloneMu.Lock()
 	n.standaloneAttempts = 0
 	n.standaloneNextRun = time.Time{}
+	n.standaloneErrorCount = 0
+	n.standaloneLastError = ""
+	n.standaloneLastErrorAt = time.Time{}
+	n.standaloneLastErrorNotif = time.Time{}
 	n.standaloneMu.Unlock()
 }
 
-func (n *Notifier) scheduleStandaloneFailure(now time.Time) {
+func (n *Notifier) scheduleStandaloneFailure(now time.Time, err error) {
+	n.maybeNotifyStandaloneErrorSummary(now, err)
+
 	n.standaloneMu.Lock()
 	attempt := n.standaloneAttempts
 	if attempt > 5 {
@@ -120,5 +129,84 @@ func (n *Notifier) scheduleStandaloneSuccess(now time.Time) {
 	n.standaloneMu.Lock()
 	n.standaloneAttempts = 0
 	n.standaloneNextRun = now.Add(standaloneBaseInterval)
+	n.standaloneErrorCount = 0
+	n.standaloneLastError = ""
+	n.standaloneLastErrorAt = time.Time{}
+	n.standaloneLastErrorNotif = time.Time{}
 	n.standaloneMu.Unlock()
+}
+
+func (n *Notifier) enterStandaloneFallbackIfNeeded(now time.Time) {
+	n.standaloneMu.Lock()
+	if n.standaloneActive {
+		n.standaloneMu.Unlock()
+		return
+	}
+	n.standaloneActive = true
+	n.standaloneStartedAt = now
+	n.standaloneMu.Unlock()
+
+	n.notifyStandaloneToGuilds("⚠️ WS断が1分以上継続したため、スタンドアロン取得にフォールバックしました。")
+}
+
+func (n *Notifier) leaveStandaloneFallbackIfActive(now time.Time) {
+	n.standaloneMu.Lock()
+	if !n.standaloneActive {
+		n.standaloneMu.Unlock()
+		return
+	}
+	startedAt := n.standaloneStartedAt
+	n.standaloneActive = false
+	n.standaloneStartedAt = time.Time{}
+	n.standaloneMu.Unlock()
+
+	duration := now.Sub(startedAt).Round(time.Second)
+	n.notifyStandaloneToGuilds(fmt.Sprintf("✅ WS接続が復帰したため、スタンドアロンフォールバックを終了しました（継続時間: %s）。", duration))
+}
+
+func (n *Notifier) maybeNotifyStandaloneErrorSummary(now time.Time, err error) {
+	n.standaloneMu.Lock()
+	n.standaloneErrorCount++
+	n.standaloneLastError = err.Error()
+	n.standaloneLastErrorAt = now
+
+	shouldNotify := n.standaloneLastErrorNotif.IsZero() || now.Sub(n.standaloneLastErrorNotif) >= standaloneErrorNotifyEvery
+	if !shouldNotify {
+		n.standaloneMu.Unlock()
+		return
+	}
+
+	count := n.standaloneErrorCount
+	lastErr := n.standaloneLastError
+	lastErrAt := n.standaloneLastErrorAt
+	n.standaloneErrorCount = 0
+	n.standaloneLastErrorNotif = now
+	n.standaloneMu.Unlock()
+
+	msg := fmt.Sprintf(
+		"⚠️ スタンドアロンフォールバックでエラーが発生しています（直近%d件）。最新エラー: `%s`（%s）",
+		count,
+		lastErr,
+		lastErrAt.Format("15:04:05"),
+	)
+	n.notifyStandaloneToGuilds(msg)
+}
+
+func (n *Notifier) notifyStandaloneToGuilds(content string) {
+	if n == nil || n.session == nil || n.settings == nil || strings.TrimSpace(content) == "" {
+		return
+	}
+	for _, guild := range n.session.State.Guilds {
+		guildID := guild.ID
+		gs := n.settings.GetGuildSettings(guildID)
+		if !gs.AutoNotifyEnabled || gs.NotificationChannel == nil {
+			continue
+		}
+		channelID := *gs.NotificationChannel
+		n.enqueueHigh(func() {
+			if _, err := n.session.ChannelMessageSend(channelID, content); err != nil {
+				log.Printf("standalone fallback notification failed guild=%s channel=%s err=%v", guildID, channelID, err)
+			}
+		})
+	}
 }

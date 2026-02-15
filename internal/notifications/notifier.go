@@ -57,6 +57,12 @@ type Notifier struct {
 	standaloneMu             sync.Mutex
 	standaloneNextRun        time.Time
 	standaloneAttempts       int
+	standaloneActive         bool
+	standaloneStartedAt      time.Time
+	standaloneErrorCount     int
+	standaloneLastError      string
+	standaloneLastErrorAt    time.Time
+	standaloneLastErrorNotif time.Time
 }
 
 // NewNotifier 通知システムを作成
