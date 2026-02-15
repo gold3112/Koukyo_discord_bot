@@ -114,7 +114,8 @@ func (m *Monitor) Connect() error {
 // Start 監視を開始
 func (m *Monitor) Start() error {
 	if err := m.Connect(); err != nil {
-		return err
+		log.Printf("Initial WebSocket connect failed: %v; starting in degraded mode", err)
+		m.markWSUnavailable(time.Now())
 	}
 
 	go m.runLoop("receiveLoop", m.receiveLoop)
