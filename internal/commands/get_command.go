@@ -33,6 +33,8 @@ func (c *GetCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreat
 	return err
 }
 
+const maxTilesLimit = 16
+
 func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	options := i.ApplicationCommandData().Options
 	var (
@@ -122,6 +124,10 @@ func (c *GetCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interaction
 		gridRows := maxTileY - minTileY + 1
 		if gridCols <= 0 || gridRows <= 0 {
 			return followupMessage(s, i, "❌ Regionタイル範囲が無効です。")
+		}
+		totalTiles := gridCols * gridRows
+		if totalTiles > maxTilesLimit {
+			return followupMessage(s, i, fmt.Sprintf("❌ 指定されたRegionが大きすぎます（%dタイル）。最大%dタイルまで取得可能です。", totalTiles, maxTilesLimit))
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

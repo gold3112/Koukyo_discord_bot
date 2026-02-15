@@ -52,7 +52,7 @@ func main() {
 	// レートリミッターの初期化
 	limiter := utils.NewRateLimiter(3)
 	defer limiter.Close()
-	activityLimiter := utils.NewRateLimiter(1)
+	activityLimiter := utils.NewRateLimiter(3)
 	defer activityLimiter.Close()
 
 	// ユーザー活動トラッカーの初期化

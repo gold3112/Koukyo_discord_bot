@@ -18,6 +18,12 @@ func (n *Notifier) StartMonitoring() {
 	n.startProgressTargetsLoop()
 	n.startDispatchWorker()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("PANIC in notifier StartMonitoring loop: %v", r)
+			}
+		}()
+
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 

@@ -40,16 +40,19 @@ type Monitor struct {
 	tracker           *activity.Tracker
 	lastMu            sync.Mutex
 	lastMsgAt         time.Time
+	reconnectAttempts int
+	reconnectBackoff  time.Duration
 }
 
 // NewMonitor 新しいMonitorを作成
 func NewMonitor(url string) *Monitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Monitor{
-		URL:    url,
-		State:  NewMonitorState(),
-		ctx:    ctx,
-		cancel: cancel,
+		URL:              url,
+		State:            NewMonitorState(),
+		ctx:              ctx,
+		cancel:           cancel,
+		reconnectBackoff: 2 * time.Second,
 	}
 }
 
@@ -99,11 +102,32 @@ func (m *Monitor) Start() error {
 		return err
 	}
 
-	go m.receiveLoop()
-	go m.pingLoop()
-	go m.keepaliveLoop()
-	go m.idleWatchLoop()
+	go m.runLoop("receiveLoop", m.receiveLoop)
+	go m.runLoop("pingLoop", m.pingLoop)
+	go m.runLoop("keepaliveLoop", m.keepaliveLoop)
+	go m.runLoop("idleWatchLoop", m.idleWatchLoop)
 	return nil
+}
+
+func (m *Monitor) runLoop(name string, fn func()) {
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC in %s: %v", name, r)
+				}
+			}()
+			fn()
+		}()
+
+		select {
+		case <-m.ctx.Done():
+			return
+		default:
+		}
+		log.Printf("%s stopped unexpectedly; restarting in 1s", name)
+		time.Sleep(1 * time.Second)
+	}
 }
 
 // receiveLoop メッセージ受信ループ
@@ -128,11 +152,31 @@ func (m *Monitor) receiveLoop() {
 			m.mu.RUnlock()
 
 			if conn == nil {
-				// Attempt reconnect while disconnected.
+				// Exponential backoff with a max interval of 5 minutes.
+				attempt := m.reconnectAttempts
+				if attempt > 8 {
+					attempt = 8
+				}
+				backoffDelay := m.reconnectBackoff * time.Duration(1<<uint(attempt))
+				if backoffDelay > 5*time.Minute {
+					backoffDelay = 5 * time.Minute
+				}
+				log.Printf("WebSocket disconnected; retrying in %v", backoffDelay)
+
+				select {
+				case <-m.ctx.Done():
+					return
+				case <-time.After(backoffDelay):
+				}
+
 				if err := m.Connect(); err != nil {
 					log.Printf("Reconnect failed: %v", err)
-					time.Sleep(10 * time.Second)
+					if m.reconnectAttempts < 8 {
+						m.reconnectAttempts++
+					}
+					continue
 				}
+				log.Println("Reconnected successfully")
 				continue
 			}
 
@@ -150,15 +194,12 @@ func (m *Monitor) receiveLoop() {
 				m.lastMu.Lock()
 				m.lastMsgAt = time.Time{}
 				m.lastMu.Unlock()
-				// 再接続処理
-				time.Sleep(10 * time.Second)
-				if err := m.Connect(); err != nil {
-					log.Printf("Reconnect failed: %v", err)
-					continue
-				}
-				log.Println("Reconnected to WebSocket")
+				// Trigger reconnection on next iteration
 				continue
 			}
+
+			// Reset only after successful message receive.
+			m.reconnectAttempts = 0
 
 			m.lastMu.Lock()
 			m.lastMsgAt = time.Now()

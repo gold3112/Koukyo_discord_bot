@@ -1,9 +1,9 @@
 package achievements
 
 import (
+	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -51,15 +51,11 @@ func Save(path string, store *Store) error {
 	if store == nil {
 		return nil
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return utils.WriteFileAtomic(path, data)
 }
 
 func (s *Store) GetByDiscordID(discordID string) *UserAchievements {

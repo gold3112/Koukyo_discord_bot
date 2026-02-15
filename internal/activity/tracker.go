@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
 	"image/png"
 	"log"
 	"net/http"
@@ -82,6 +83,8 @@ const (
 	newUserNotifyWindow         = 5 * time.Minute
 	defaultStateFlushInterval   = 10 * time.Second
 	defaultRecentEventsInterval = 1 * time.Minute
+	defaultActivityGCInterval   = 24 * time.Hour
+	activityRetentionDays       = 30
 )
 
 type Tracker struct {
@@ -110,6 +113,7 @@ type Tracker struct {
 	dirtyDailyCounts   bool
 	flushInterval      time.Duration
 	recentGCInterval   time.Duration
+	activityGCInterval time.Duration
 }
 
 type NewUserCallback func(kind string, user UserActivity)
@@ -148,6 +152,7 @@ func NewTracker(cfg Config, limiter *utils.RateLimiter, dataDir string) *Tracker
 		recentFixEvents:    make(map[string][]time.Time),
 		flushInterval:      loadDurationFromEnv("ACTIVITY_FLUSH_INTERVAL_SECONDS", defaultStateFlushInterval, time.Second, 10*time.Minute),
 		recentGCInterval:   loadDurationFromEnv("ACTIVITY_RECENT_GC_INTERVAL_SECONDS", defaultRecentEventsInterval, 10*time.Second, 10*time.Minute),
+		activityGCInterval: loadDurationFromEnv("ACTIVITY_GC_INTERVAL_SECONDS", defaultActivityGCInterval, 1*time.Hour, 7*24*time.Hour),
 	}
 	t.loadState()
 	t.loadDailyCounts()
@@ -161,14 +166,36 @@ func (t *Tracker) SetNewUserCallback(cb NewUserCallback) {
 }
 
 func (t *Tracker) Start() {
-	go t.worker()
-	go t.diffWorker()
-	go t.flushWorker()
-	go t.recentEventsGCWorker()
+	go t.runWorker("worker", t.worker)
+	go t.runWorker("diffWorker", t.diffWorker)
+	go t.runWorker("flushWorker", t.flushWorker)
+	go t.runWorker("recentEventsGCWorker", t.recentEventsGCWorker)
+	go t.runWorker("activityGCWorker", t.activityGCWorker)
 }
 
 func (t *Tracker) Stop() {
 	t.cancel()
+}
+
+func (t *Tracker) runWorker(name string, fn func()) {
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC in activity %s: %v", name, r)
+				}
+			}()
+			fn()
+		}()
+
+		select {
+		case <-t.ctx.Done():
+			return
+		default:
+		}
+		log.Printf("activity %s stopped unexpectedly; restarting in 1s", name)
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func (t *Tracker) EnqueueDiffImage(pngBytes []byte) {
@@ -201,17 +228,49 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 
 	newDiff := make(map[string]Pixel)
 	nonZero := 0
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			_, _, _, a := img.At(x, y).RGBA()
-			if a == 0 {
-				continue
+
+	// Optimize by using direct pixel access if possible
+	if nrgba, ok := img.(*image.NRGBA); ok {
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				i := nrgba.PixOffset(x, y)
+				if nrgba.Pix[i+3] == 0 {
+					continue
+				}
+				nonZero++
+				absX := baseAbsX + (x - bounds.Min.X)
+				absY := baseAbsY + (y - bounds.Min.Y)
+				key := pixelKey(absX, absY)
+				newDiff[key] = Pixel{AbsX: absX, AbsY: absY}
 			}
-			nonZero++
-			absX := baseAbsX + (x - bounds.Min.X)
-			absY := baseAbsY + (y - bounds.Min.Y)
-			key := pixelKey(absX, absY)
-			newDiff[key] = Pixel{AbsX: absX, AbsY: absY}
+		}
+	} else if rgba, ok := img.(*image.RGBA); ok {
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				i := rgba.PixOffset(x, y)
+				if rgba.Pix[i+3] == 0 {
+					continue
+				}
+				nonZero++
+				absX := baseAbsX + (x - bounds.Min.X)
+				absY := baseAbsY + (y - bounds.Min.Y)
+				key := pixelKey(absX, absY)
+				newDiff[key] = Pixel{AbsX: absX, AbsY: absY}
+			}
+		}
+	} else {
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				_, _, _, a := img.At(x, y).RGBA()
+				if a == 0 {
+					continue
+				}
+				nonZero++
+				absX := baseAbsX + (x - bounds.Min.X)
+				absY := baseAbsY + (y - bounds.Min.Y)
+				key := pixelKey(absX, absY)
+				newDiff[key] = Pixel{AbsX: absX, AbsY: absY}
+			}
 		}
 	}
 	activityDebugf("activity diff pixels detected: %d", nonZero)
@@ -373,7 +432,7 @@ func (t *Tracker) processPixel(px Pixel) {
 	cb := t.newUserCB
 	var userCopy UserActivity
 	if shouldNotify {
-		userCopy = *entry
+		userCopy = cloneUserActivity(entry)
 	}
 	t.mu.Unlock()
 
@@ -602,44 +661,56 @@ func (t *Tracker) cleanupRecentEvents(now time.Time) {
 	t.mu.Unlock()
 }
 
+func (t *Tracker) activityGCWorker() {
+	ticker := time.NewTicker(t.activityGCInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-ticker.C:
+			t.cleanupActivity(time.Now().UTC())
+		}
+	}
+}
+
+func (t *Tracker) cleanupActivity(now time.Time) {
+	cutoff := now.AddDate(0, 0, -activityRetentionDays)
+	t.mu.Lock()
+	removedCount := 0
+	for id, entry := range t.activity {
+		if entry.LastSeen == "" {
+			continue
+		}
+		lastSeen, err := time.Parse(time.RFC3339Nano, entry.LastSeen)
+		if err != nil {
+			// fallback to RFC3339
+			lastSeen, err = time.Parse(time.RFC3339, entry.LastSeen)
+		}
+		if err == nil && lastSeen.Before(cutoff) {
+			delete(t.activity, id)
+			removedCount++
+		}
+	}
+	if removedCount > 0 {
+		t.dirtyActivity = true
+		log.Printf("Activity GC: removed %d inactive users (cutoff=%s)", removedCount, cutoff.Format("2006-01-02"))
+	}
+	t.mu.Unlock()
+
+	// Persist GC result immediately so evicted users are not restored on restart.
+	if removedCount > 0 {
+		t.flushDirtyState()
+	}
+}
+
 func (t *Tracker) writeFileAtomic(filename string, payload []byte) error {
 	if t.dataDir == "" {
 		return fmt.Errorf("dataDir is empty")
 	}
-	if err := os.MkdirAll(t.dataDir, 0755); err != nil {
-		return err
-	}
 	path := filepath.Join(t.dataDir, filename)
-	tmp, err := os.CreateTemp(t.dataDir, filename+".tmp.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(payload); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-			_ = os.Remove(tmpName)
-			return removeErr
-		}
-		if err := os.Rename(tmpName, path); err != nil {
-			_ = os.Remove(tmpName)
-			return err
-		}
-	}
-	return nil
+	return utils.WriteFileAtomic(path, payload)
 }
 
 func ensureActivityMaps(entry *UserActivity) {
@@ -652,6 +723,33 @@ func ensureActivityMaps(entry *UserActivity) {
 	if entry.DailyActivityScores == nil {
 		entry.DailyActivityScores = make(map[string]int)
 	}
+}
+
+func cloneUserActivity(src *UserActivity) UserActivity {
+	if src == nil {
+		return UserActivity{}
+	}
+
+	dst := *src
+	dst.DailyVandalCounts = cloneStringIntMap(src.DailyVandalCounts)
+	dst.DailyRestoredCounts = cloneStringIntMap(src.DailyRestoredCounts)
+	dst.DailyActivityScores = cloneStringIntMap(src.DailyActivityScores)
+	if src.LastPixel != nil {
+		lastPixel := *src.LastPixel
+		dst.LastPixel = &lastPixel
+	}
+	return dst
+}
+
+func cloneStringIntMap(src map[string]int) map[string]int {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]int, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func buildDailyActivityScores(entry *UserActivity) map[string]int {

@@ -35,7 +35,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		&commands.PingCommand{},
 		commands.NewInfoCommand(botInfo),
 		commands.NewExplanationCommand(),
-		commands.NewStatusCommand(botInfo),
+		commands.NewStatusCommand(botInfo, notifier),
 		commands.NewNowCommand(mon),
 		commands.NewTimeCommand(),
 		commands.NewConvertCommand(),

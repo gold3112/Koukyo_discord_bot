@@ -1,9 +1,9 @@
 package config
 
 import (
+	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -125,17 +125,12 @@ func (sm *SettingsManager) SaveIfDirty() error {
 }
 
 func (sm *SettingsManager) saveUnsafe() error {
-	dir := filepath.Dir(sm.filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(sm.settings, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(sm.filePath, data, 0644)
+	return utils.WriteFileAtomic(sm.filePath, data)
 }
 
 // GetGuildSettings サーバー設定を取得（存在しない場合はデフォルト）

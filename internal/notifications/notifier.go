@@ -51,6 +51,9 @@ type Notifier struct {
 	fixUserNotifier          *FixUserNotifier
 	watchTargetsState        *watchTargetsRuntime
 	progressTargetsState     *progressTargetsRuntime
+	droppedHighPriority      uint64
+	droppedLowPriority       uint64
+	metricsMu                sync.Mutex
 }
 
 // NewNotifier 通知システムを作成
@@ -116,7 +119,11 @@ func (n *Notifier) enqueueHigh(fn dispatchFunc) {
 	case n.dispatchHigh <- fn:
 	default:
 		// Drop if overloaded; do not block the monitoring loop.
-		log.Printf("dispatch: high queue full, dropping notification")
+		n.metricsMu.Lock()
+		n.droppedHighPriority++
+		dropped := n.droppedHighPriority
+		n.metricsMu.Unlock()
+		log.Printf("⚠️ dispatch: high queue full, dropping notification (total dropped: %d)", dropped)
 	}
 }
 
@@ -140,8 +147,19 @@ func (n *Notifier) enqueueLow(key string, fn dispatchFunc) {
 		n.dispatchLowMu.Lock()
 		n.dispatchLowQueued[key] = false
 		n.dispatchLowMu.Unlock()
-		log.Printf("dispatch: low queue full, dropping enqueue key=%s", key)
+		n.metricsMu.Lock()
+		n.droppedLowPriority++
+		dropped := n.droppedLowPriority
+		n.metricsMu.Unlock()
+		log.Printf("⚠️ dispatch: low queue full, dropping enqueue key=%s (total dropped: %d)", key, dropped)
 	}
+}
+
+// GetDroppedNotificationStats 通知ドロップ統計を取得
+func (n *Notifier) GetDroppedNotificationStats() (high, low uint64) {
+	n.metricsMu.Lock()
+	defer n.metricsMu.Unlock()
+	return n.droppedHighPriority, n.droppedLowPriority
 }
 
 // getState サーバーの通知状態を取得

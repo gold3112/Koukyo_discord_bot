@@ -477,6 +477,9 @@ func buildRegionDetailImage(reg Region, limiter *utils.RateLimiter) (*discordgo.
 		return nil, nil, "", fmt.Errorf("Regionタイル範囲が無効です。")
 	}
 	totalTiles := gridCols * gridRows
+	if totalTiles > regionMapMaxTiles {
+		return nil, nil, "", fmt.Errorf("Regionが大きすぎます（%dタイル）。最大%dタイルまで詳細取得可能です。", totalTiles, regionMapMaxTiles)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	tilesData, err := wplace.DownloadTilesGrid(ctx, limiter, minTileX, minTileY, gridCols, gridRows, 16)
 	cancel()
