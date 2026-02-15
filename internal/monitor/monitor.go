@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,19 +44,30 @@ type Monitor struct {
 	tracker           *activity.Tracker
 	lastMu            sync.Mutex
 	lastMsgAt         time.Time
+	wsUnavailableSince time.Time
 	reconnectAttempts int
 	reconnectBackoff  time.Duration
+	pollURL           string
+	pollClient        *http.Client
+	pollBaseInterval  time.Duration
+	pollMu            sync.Mutex
+	pollAttempts      int
+	pollNextAttemptAt time.Time
 }
 
 // NewMonitor 新しいMonitorを作成
 func NewMonitor(url string) *Monitor {
 	ctx, cancel := context.WithCancel(context.Background())
+	pollURL := strings.TrimSpace(os.Getenv("MONITOR_POLL_URL"))
 	return &Monitor{
 		URL:              url,
 		State:            NewMonitorState(),
 		ctx:              ctx,
 		cancel:           cancel,
 		reconnectBackoff: 2 * time.Second,
+		pollURL:          pollURL,
+		pollClient:       &http.Client{Timeout: 10 * time.Second},
+		pollBaseInterval: 10 * time.Second,
 	}
 }
 
@@ -106,6 +121,11 @@ func (m *Monitor) Start() error {
 	go m.runLoop("pingLoop", m.pingLoop)
 	go m.runLoop("keepaliveLoop", m.keepaliveLoop)
 	go m.runLoop("idleWatchLoop", m.idleWatchLoop)
+	if m.pollURL != "" {
+		go m.runLoop("pollFallbackLoop", m.pollFallbackLoop)
+	} else {
+		log.Println("Monitor polling fallback disabled (MONITOR_POLL_URL is empty)")
+	}
 	return nil
 }
 
@@ -139,6 +159,7 @@ func (m *Monitor) receiveLoop() {
 		}
 		m.connected = false
 		m.mu.Unlock()
+		m.markWSUnavailable(time.Now())
 	}()
 
 	for {
@@ -152,6 +173,7 @@ func (m *Monitor) receiveLoop() {
 			m.mu.RUnlock()
 
 			if conn == nil {
+				m.markWSUnavailable(time.Now())
 				// Exponential backoff with a max interval of 5 minutes.
 				attempt := m.reconnectAttempts
 				if attempt > 8 {
@@ -194,12 +216,14 @@ func (m *Monitor) receiveLoop() {
 				m.lastMu.Lock()
 				m.lastMsgAt = time.Time{}
 				m.lastMu.Unlock()
+				m.markWSUnavailable(time.Now())
 				// Trigger reconnection on next iteration
 				continue
 			}
 
 			// Reset only after successful message receive.
 			m.reconnectAttempts = 0
+			m.markWSHealthy(time.Now())
 
 			m.lastMu.Lock()
 			m.lastMsgAt = time.Now()
@@ -321,11 +345,158 @@ func (m *Monitor) forceReconnectIfIdle() {
 	m.conn = nil
 	m.connected = false
 	m.mu.Unlock()
+	m.markWSUnavailable(now)
 
 	if conn != nil {
 		_ = conn.Close()
 	}
 	monitorDebugf("WebSocket idle >60s: forced reconnect triggered")
+}
+
+func (m *Monitor) markWSUnavailable(now time.Time) {
+	m.lastMu.Lock()
+	if m.wsUnavailableSince.IsZero() {
+		m.wsUnavailableSince = now
+	}
+	m.lastMu.Unlock()
+}
+
+func (m *Monitor) markWSHealthy(now time.Time) {
+	m.lastMu.Lock()
+	m.wsUnavailableSince = time.Time{}
+	m.lastMsgAt = now
+	m.lastMu.Unlock()
+}
+
+func (m *Monitor) getWSUnavailableSince() time.Time {
+	m.lastMu.Lock()
+	defer m.lastMu.Unlock()
+	return m.wsUnavailableSince
+}
+
+// IsWSUnavailableFor reports whether WebSocket has been unavailable for at least d.
+func (m *Monitor) IsWSUnavailableFor(d time.Duration) bool {
+	if d <= 0 {
+		return false
+	}
+	since := m.getWSUnavailableSince()
+	if since.IsZero() {
+		return false
+	}
+	return time.Since(since) >= d
+}
+
+func (m *Monitor) shouldPollFallback(now time.Time) bool {
+	since := m.getWSUnavailableSince()
+	if since.IsZero() {
+		m.resetPollBackoff()
+		return false
+	}
+	return now.Sub(since) >= 1*time.Minute
+}
+
+func (m *Monitor) resetPollBackoff() {
+	m.pollMu.Lock()
+	m.pollAttempts = 0
+	m.pollNextAttemptAt = time.Time{}
+	m.pollMu.Unlock()
+}
+
+func (m *Monitor) nextPollDelayLocked() time.Duration {
+	attempt := m.pollAttempts
+	if attempt > 5 {
+		attempt = 5
+	}
+	delay := m.pollBaseInterval * time.Duration(1<<uint(attempt))
+	if delay > 5*time.Minute {
+		delay = 5 * time.Minute
+	}
+	return delay
+}
+
+func (m *Monitor) pollFallbackLoop() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			if !m.shouldPollFallback(now) {
+				continue
+			}
+
+			m.pollMu.Lock()
+			if !m.pollNextAttemptAt.IsZero() && now.Before(m.pollNextAttemptAt) {
+				m.pollMu.Unlock()
+				continue
+			}
+			m.pollMu.Unlock()
+
+			data, err := m.fetchPolledData()
+			if err != nil {
+				m.pollMu.Lock()
+				delay := m.nextPollDelayLocked()
+				m.pollNextAttemptAt = time.Now().Add(delay)
+				if m.pollAttempts < 5 {
+					m.pollAttempts++
+				}
+				m.pollMu.Unlock()
+				log.Printf("Monitor poll fallback failed: %v", err)
+				continue
+			}
+
+			m.State.UpdateData(data)
+			m.pollMu.Lock()
+			m.pollAttempts = 0
+			m.pollNextAttemptAt = time.Now().Add(m.pollBaseInterval)
+			m.pollMu.Unlock()
+		}
+	}
+}
+
+func (m *Monitor) fetchPolledData() (*MonitorData, error) {
+	req, err := http.NewRequestWithContext(m.ctx, http.MethodGet, m.pollURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := m.pollClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("poll status=%d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return parsePolledMonitorData(body)
+}
+
+func parsePolledMonitorData(body []byte) (*MonitorData, error) {
+	var direct MonitorData
+	if err := json.Unmarshal(body, &direct); err == nil {
+		if direct.Type != "" || direct.TotalPixels > 0 || direct.DiffPixels > 0 || direct.DiffPercentage != 0 {
+			return &direct, nil
+		}
+	}
+
+	var wrapped struct {
+		Data *MonitorData `json:"data"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err != nil {
+		return nil, err
+	}
+	if wrapped.Data == nil {
+		return nil, fmt.Errorf("invalid poll payload")
+	}
+	return wrapped.Data, nil
 }
 
 // handleMessage メッセージを処理

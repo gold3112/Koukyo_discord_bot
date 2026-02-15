@@ -54,6 +54,9 @@ type Notifier struct {
 	droppedHighPriority      uint64
 	droppedLowPriority       uint64
 	metricsMu                sync.Mutex
+	standaloneMu             sync.Mutex
+	standaloneNextRun        time.Time
+	standaloneAttempts       int
 }
 
 // NewNotifier 通知システムを作成
