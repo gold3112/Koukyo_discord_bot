@@ -19,14 +19,13 @@ import (
 )
 
 const (
-	meLinkTileX      = 1755
-	meLinkTileY      = 55
-	meLinkPixelMargin = 2
-	meLinkMaxSessions = 20
+	meLinkTileX        = 1755
+	meLinkTileY        = 55
+	meLinkPixelMargin  = 2
+	meLinkMaxSessions  = 20
 	meLinkPickAttempts = 50
-	meLinkTimeout    = 1 * time.Minute
-	meLinkPollEvery  = 10 * time.Second
-	meLinkZoom       = 21.17
+	meLinkTimeout      = 1 * time.Minute
+	meLinkPollEvery    = 10 * time.Second
 )
 
 type meLinkSession struct {
@@ -35,7 +34,7 @@ type meLinkSession struct {
 	pixelY    int
 	initialID int
 	startedAt time.Time
-	notify   func(string)
+	notify    func(string)
 }
 
 type meLinkManager struct {
@@ -134,8 +133,12 @@ func (c *MeCommand) startLinkFlow(
 		session.initialID = resp.PaintedBy.ID
 	}
 
-	latLng := utils.TilePixelCenterToLngLat(meLinkTileX, meLinkTileY, session.pixelX, session.pixelY)
-	url := utils.BuildWplaceURL(latLng.Lng, latLng.Lat, meLinkZoom)
+	url := utils.BuildWplaceHighDetailPixelURL(&utils.Coordinate{
+		TileX:  meLinkTileX,
+		TileY:  meLinkTileY,
+		PixelX: session.pixelX,
+		PixelY: session.pixelY,
+	})
 	instruction := strings.TrimSpace(fmt.Sprintf(
 		"✅ Wplace連携の確認を開始します。\n"+
 			"1分以内にこのURLを開き、指定ピクセルに色を置いてください。\n"+

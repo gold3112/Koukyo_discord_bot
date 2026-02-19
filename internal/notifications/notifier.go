@@ -7,6 +7,7 @@ import (
 	"Koukyo_discord_bot/internal/monitor"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -247,6 +248,51 @@ func guildKeyFromState(state *NotificationState) string {
 	return fmt.Sprintf("%p", state)
 }
 
+// resetAllSmallDiffMessageTracking clears editable text-message pointers so the next
+// small-diff event starts from a fresh message instead of editing an old one.
+func (n *Notifier) resetAllSmallDiffMessageTracking() {
+	if n == nil {
+		return
+	}
+
+	n.mu.RLock()
+	states := make([]*NotificationState, 0, len(n.states))
+	for _, state := range n.states {
+		states = append(states, state)
+	}
+	n.mu.RUnlock()
+
+	for _, state := range states {
+		if state == nil {
+			continue
+		}
+		state.mu.Lock()
+		state.SmallDiffMessageID = ""
+		state.SmallDiffMessageChannelID = ""
+		state.mu.Unlock()
+
+		state.SmallDiffLastContent = ""
+		state.SmallDiffNextUpdate = time.Time{}
+	}
+}
+
+func (n *Notifier) buildSmallDiffCoordinateLines(limit int) []string {
+	if n == nil || n.monitor == nil || limit <= 0 {
+		return nil
+	}
+	images := n.monitor.GetLatestImages()
+	if images == nil || len(images.DiffImage) == 0 {
+		return nil
+	}
+
+	lines, err := smallDiffCoordinateLines(images.DiffImage, limit)
+	if err != nil {
+		log.Printf("small_diff: failed to build coordinate lines: %v", err)
+		return nil
+	}
+	return lines
+}
+
 // CheckAndNotify 差分率をチェックして通知を送信 (Refactored)
 func (n *Notifier) CheckAndNotify(guildID string) {
 	settings := n.settings.GetGuildSettings(guildID)
@@ -304,6 +350,9 @@ func (n *Notifier) handleSmallDiff(
 			data.DiffPixels,
 			data.TotalPixels,
 		)
+		if lines := n.buildSmallDiffCoordinateLines(smallDiffPixelLimit); len(lines) > 0 {
+			content += "\n" + strings.Join(lines, "\n")
+		}
 		n.upsertSmallDiffMessage(*settings.NotificationChannel, state, content, false)
 		state.SmallDiffActive = true
 		state.LastTier = currentTier

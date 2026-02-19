@@ -11,7 +11,9 @@ import (
 	"Koukyo_discord_bot/internal/version"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 	_ "time/tzdata"
 
@@ -89,7 +91,8 @@ func main() {
 
 	dg, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Failed to create Discord session: %v", err)
+		return
 	}
 	// Prevent rare but catastrophic "stuck REST call" situations from blocking the
 	// monitoring loop indefinitely (e.g. small-diff edits).
@@ -119,7 +122,8 @@ func main() {
 
 	err = dg.Open()
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Failed to open Discord session: %v", err)
+		return
 	}
 	defer func() {
 		h.Cleanup(dg)
@@ -130,5 +134,9 @@ func main() {
 	}()
 
 	log.Printf("Bot started - Version: %s, Date: %s\n", version.Version, time.Now().Format("2006-01-02"))
-	select {}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	sig := <-sigCh
+	signal.Stop(sigCh)
+	log.Printf("Shutdown signal received: %s", sig.String())
 }

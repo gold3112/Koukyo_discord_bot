@@ -103,7 +103,7 @@ func (n *Notifier) HandleProgressTargetManual(channelID, targetID string) bool {
 	go func() {
 		result, err := n.buildProgressTargetResult(target)
 		if err != nil {
-			_, _ = n.session.ChannelMessageSend(channelID, fmt.Sprintf("❌ 進捗監視の取得に失敗しました: %v", err))
+			log.Printf("progress_targets: manual fetch failed channel=%s target=%s err=%v", channelID, target.ID, err)
 			return
 		}
 		n.sendProgressManual(channelID, target, result)
@@ -276,33 +276,7 @@ func (n *Notifier) handleProgressTargetError(target progressTargetConfig, err er
 }
 
 func (n *Notifier) sendProgressTargetErrorNotification(target progressTargetConfig, err error) {
-	for _, guild := range n.session.State.Guilds {
-		settings := n.settings.GetGuildSettings(guild.ID)
-		if !settings.ProgressNotifyEnabled || settings.ProgressChannel == nil {
-			continue
-		}
-		embed := &discordgo.MessageEmbed{
-			Title:       "⚠️ 進捗監視エラー",
-			Description: fmt.Sprintf("対象 `%s` をスキップします。", target.Label),
-			Color:       0xF39C12,
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "対象",
-					Value:  fmt.Sprintf("`%s`", target.Label),
-					Inline: true,
-				},
-				{
-					Name:   "原因",
-					Value:  fmt.Sprintf("`%v`", err),
-					Inline: false,
-				},
-			},
-			Timestamp: time.Now().Format(time.RFC3339),
-		}
-		if _, sendErr := n.session.ChannelMessageSendEmbed(*settings.ProgressChannel, embed); sendErr != nil {
-			log.Printf("progress_targets: error notify failed guild=%s target=%s err=%v", guild.ID, target.ID, sendErr)
-		}
-	}
+	log.Printf("progress_targets: suppressed error notification target=%s label=%q err=%v", target.ID, target.Label, err)
 }
 
 func (w *progressTargetsRuntime) loadProgressConfigs() ([]progressTargetConfig, error) {

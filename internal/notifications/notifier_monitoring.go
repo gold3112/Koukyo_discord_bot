@@ -44,8 +44,15 @@ func (n *Notifier) StartMonitoring() {
 
 			currentPowerSave := n.monitor.State.IsPowerSaveMode()
 			if n.lastPowerSaveMode && !currentPowerSave {
+				// Reset small-diff editable message pointers so post-resume updates
+				// don't edit stale messages that sit above the resume notification.
+				n.resetAllSmallDiffMessageTracking()
 				// For debugging: notify resume, but never block the monitoring loop.
 				go n.notifyPowerSaveResume()
+			}
+			if !n.lastPowerSaveMode && currentPowerSave {
+				// Entering power-save also resets pointers to avoid cross-cycle edits.
+				n.resetAllSmallDiffMessageTracking()
 			}
 			n.lastPowerSaveMode = currentPowerSave
 

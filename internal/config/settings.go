@@ -39,6 +39,8 @@ type SettingsManager struct {
 	mu         sync.RWMutex
 	dirty      bool
 	shutdownCh chan struct{}
+	closeOnce  sync.Once
+	saverDone  chan struct{}
 }
 
 // NewSettingsManager 設定マネージャーを作成
@@ -47,6 +49,7 @@ func NewSettingsManager(configPath string) *SettingsManager {
 		settings:   make(map[string]GuildSettings),
 		filePath:   configPath,
 		shutdownCh: make(chan struct{}),
+		saverDone:  make(chan struct{}),
 	}
 	if err := sm.load(); err != nil {
 		// log.Printf("Failed to load settings, starting with default: %v", err)
@@ -57,10 +60,14 @@ func NewSettingsManager(configPath string) *SettingsManager {
 
 // Close シャットダウン処理
 func (sm *SettingsManager) Close() {
-	close(sm.shutdownCh)
+	sm.closeOnce.Do(func() {
+		close(sm.shutdownCh)
+		<-sm.saverDone
+	})
 }
 
 func (sm *SettingsManager) periodicSaver(interval time.Duration) {
+	defer close(sm.saverDone)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

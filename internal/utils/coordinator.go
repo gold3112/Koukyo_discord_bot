@@ -12,6 +12,9 @@ const (
 	WplaceTileSize = 1000
 	// WplaceTilesPerEdge 1辺のタイル数 = 2^zoom
 	WplaceTilesPerEdge = 1 << WplaceZoom // 2048
+	// WplaceHighDetailZoom is used when a link should focus on a single pixel.
+	// Keep this in sync with `/me` link-flow behavior.
+	WplaceHighDetailZoom = 21.17
 )
 
 // Coordinate 座標データ
@@ -95,6 +98,20 @@ func TilePixelCenterToLngLat(tileX, tileY, pixelX, pixelY int) *LngLat {
 func BuildWplaceURL(lng, lat, zoom float64) string {
 	return fmt.Sprintf("https://wplace.live/?lat=%.6f&lng=%.6f&zoom=%.2f",
 		lat, lng, zoom)
+}
+
+// BuildWplacePixelURL returns a Wplace URL centered on a pixel coordinate.
+func BuildWplacePixelURL(coord *Coordinate, zoom float64) string {
+	if coord == nil {
+		return ""
+	}
+	center := TilePixelCenterToLngLat(coord.TileX, coord.TileY, coord.PixelX, coord.PixelY)
+	return BuildWplaceURL(center.Lng, center.Lat, zoom)
+}
+
+// BuildWplaceHighDetailPixelURL returns a high-zoom Wplace URL centered on a pixel.
+func BuildWplaceHighDetailPixelURL(coord *Coordinate) string {
+	return BuildWplacePixelURL(coord, WplaceHighDetailZoom)
 }
 
 // FormatHyphenCoords ハイフン形式の座標文字列を生成

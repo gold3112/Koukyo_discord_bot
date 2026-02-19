@@ -119,7 +119,7 @@ func (n *Notifier) HandleWatchTargetManual(channelID, targetID string) bool {
 	go func() {
 		result, err := n.buildWatchTargetResult(target)
 		if err != nil {
-			_, _ = n.session.ChannelMessageSend(channelID, fmt.Sprintf("❌ 追加監視の取得に失敗しました: %v", err))
+			log.Printf("watch_targets: manual fetch failed channel=%s target=%s err=%v", channelID, target.ID, err)
 			return
 		}
 		n.sendWatchTargetManual(channelID, target, result)
@@ -354,33 +354,7 @@ func (n *Notifier) handleWatchTargetError(target watchTargetConfig, err error, n
 }
 
 func (n *Notifier) sendWatchTargetErrorNotification(target watchTargetConfig, err error) {
-	for _, guild := range n.session.State.Guilds {
-		settings := n.settings.GetGuildSettings(guild.ID)
-		if !settings.AutoNotifyEnabled || settings.NotificationChannel == nil {
-			continue
-		}
-		embed := &discordgo.MessageEmbed{
-			Title:       "⚠️ 追加監視エラー",
-			Description: fmt.Sprintf("対象 `%s` をスキップします。", target.Label),
-			Color:       0xF39C12,
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "対象",
-					Value:  fmt.Sprintf("`%s`", target.Label),
-					Inline: true,
-				},
-				{
-					Name:   "原因",
-					Value:  fmt.Sprintf("`%v`", err),
-					Inline: false,
-				},
-			},
-			Timestamp: time.Now().Format(time.RFC3339),
-		}
-		if _, sendErr := n.session.ChannelMessageSendEmbed(*settings.NotificationChannel, embed); sendErr != nil {
-			log.Printf("watch_targets: error notify failed guild=%s target=%s err=%v", guild.ID, target.ID, sendErr)
-		}
-	}
+	log.Printf("watch_targets: suppressed error notification target=%s label=%q err=%v", target.ID, target.Label, err)
 }
 
 func (w *watchTargetsRuntime) loadConfigs() ([]watchTargetConfig, error) {
