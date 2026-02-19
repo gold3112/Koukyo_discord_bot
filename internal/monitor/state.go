@@ -422,7 +422,11 @@ func (ms *MonitorState) GetDiffHistory(duration time.Duration, weighted bool) []
 			return
 		}
 		r := p.(DiffRecord)
-		if duration <= 0 || r.Timestamp.IsZero() || r.Timestamp.After(cutoff) || r.Timestamp.Equal(cutoff) {
+		if r.Timestamp.IsZero() {
+			// Legacy/invalid records must be ignored; zero timestamps distort graph time axis.
+			return
+		}
+		if duration <= 0 || r.Timestamp.After(cutoff) || r.Timestamp.Equal(cutoff) {
 			out = append(out, r)
 		}
 	})

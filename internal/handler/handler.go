@@ -55,6 +55,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 	if mon != nil {
 		commandsList = append(commandsList,
 			commands.NewGraphCommand(mon, dataDir),
+			commands.NewPredictCommand(mon),
 			commands.NewTimelapseCommand(mon),
 			commands.NewHeatmapCommand(mon),
 		)

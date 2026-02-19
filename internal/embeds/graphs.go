@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"sort"
 	"time"
 
 	"golang.org/x/image/font"
@@ -65,6 +66,7 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 		img.Set(plotRect.Min.X, y, axisColor)
 	}
 
+	history = sanitizeDiffHistory(history)
 	if len(history) < 2 {
 		// データが少ない場合は空のPNG返却
 		buf := &bytes.Buffer{}
@@ -80,6 +82,9 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 	if tMax.Before(tMin) {
 		tMax = tMin.Add(time.Second)
 	}
+	if tMax.Equal(tMin) {
+		tMax = tMin.Add(time.Second)
+	}
 	pMax := 0.0
 	pMin := 0.0
 	for _, r := range history {
@@ -91,6 +96,19 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 		}
 	}
 	pMax = math.Max(pMax, 1.0)
+	if pMax <= pMin {
+		pMin = 0
+	}
+
+	gapThreshold := estimateGraphGapThreshold(history)
+	tSpan := tMax.Sub(tMin)
+	if tSpan <= 0 {
+		tSpan = time.Second
+	}
+	pSpan := pMax - pMin
+	if pSpan <= 0 {
+		pSpan = 1
+	}
 
 	// Y軸目盛り
 	tickColor := color.RGBA{100, 100, 120, 255}
@@ -120,9 +138,10 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 	lineColor := color.RGBA{40, 120, 255, 255}
 	pointColor := color.RGBA{0, 0, 0, 255}
 	prevX, prevY := 0, 0
+	prevTS := time.Time{}
 	for i, r := range history {
-		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(r.Timestamp.Sub(tMin))/float64(tMax.Sub(tMin)))
-		y := plotRect.Max.Y - int(float64(plotRect.Dy())*((r.Percentage-pMin)/(pMax-pMin)))
+		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(r.Timestamp.Sub(tMin))/float64(tSpan))
+		y := plotRect.Max.Y - int(float64(plotRect.Dy())*((r.Percentage-pMin)/pSpan))
 
 		// 太めの点
 		for dx := -1; dx <= 1; dx++ {
@@ -131,7 +150,12 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 			}
 		}
 
-		if i > 0 {
+		connect := i > 0
+		if connect && gapThreshold > 0 && !prevTS.IsZero() && r.Timestamp.Sub(prevTS) > gapThreshold {
+			// Large time gaps mean missing samples; avoid misleading straight bridges.
+			connect = false
+		}
+		if connect {
 			// 前の点から線を引く（太線）
 			dx := x - prevX
 			dy := y - prevY
@@ -150,6 +174,7 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 			}
 		}
 		prevX, prevY = x, y
+		prevTS = r.Timestamp
 	}
 
 	// エンコード
@@ -158,6 +183,49 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 		return nil, err
 	}
 	return buf, nil
+}
+
+func sanitizeDiffHistory(history []monitor.DiffRecord) []monitor.DiffRecord {
+	if len(history) == 0 {
+		return nil
+	}
+	out := make([]monitor.DiffRecord, 0, len(history))
+	for _, r := range history {
+		if r.Timestamp.IsZero() {
+			continue
+		}
+		if math.IsNaN(r.Percentage) || math.IsInf(r.Percentage, 0) {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Timestamp.Before(out[j].Timestamp)
+	})
+	return out
+}
+
+func estimateGraphGapThreshold(history []monitor.DiffRecord) time.Duration {
+	if len(history) < 3 {
+		return 0
+	}
+	deltas := make([]time.Duration, 0, len(history)-1)
+	for i := 1; i < len(history); i++ {
+		d := history[i].Timestamp.Sub(history[i-1].Timestamp)
+		if d > 0 {
+			deltas = append(deltas, d)
+		}
+	}
+	if len(deltas) == 0 {
+		return 0
+	}
+	sort.Slice(deltas, func(i, j int) bool { return deltas[i] < deltas[j] })
+	median := deltas[len(deltas)/2]
+	threshold := median * 5
+	if threshold < 30*time.Second {
+		threshold = 30 * time.Second
+	}
+	return threshold
 }
 
 // BuildDailyCountGraphPNG 日次件数の折れ線グラフPNGを生成

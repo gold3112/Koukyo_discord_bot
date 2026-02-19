@@ -16,15 +16,20 @@ func BuildTimelapseGIF(frames []monitor.TimelapseFrame) (*bytes.Buffer, error) {
 	if len(frames) == 0 {
 		return nil, errors.New("timelapse: no frames")
 	}
+	const frameDelay = 7       // 0.07s/frame (単位: 1/100秒)
+	const finalHoldDelay = 100 // 最終フレームは1秒保持
+
 	out := &gif.GIF{}
-	delay := 7 // 0.07s/frame (単位: 1/100秒)
 	for _, f := range frames {
 		img, err := frameToPaletted(f)
 		if err != nil {
 			return nil, err
 		}
 		out.Image = append(out.Image, img)
-		out.Delay = append(out.Delay, delay)
+		out.Delay = append(out.Delay, frameDelay)
+	}
+	if len(out.Delay) > 0 {
+		out.Delay[len(out.Delay)-1] = finalHoldDelay
 	}
 	buf := &bytes.Buffer{}
 	if err := gif.EncodeAll(buf, out); err != nil {
