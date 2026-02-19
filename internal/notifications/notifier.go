@@ -64,6 +64,11 @@ type Notifier struct {
 	standaloneLastError      string
 	standaloneLastErrorAt    time.Time
 	standaloneLastErrorNotif time.Time
+	smallDiffCacheMu         sync.Mutex
+	smallDiffCacheTS         time.Time
+	smallDiffCacheDiffLen    int
+	smallDiffCacheLimit      int
+	smallDiffCacheLines      []string
 }
 
 // NewNotifier 通知システムを作成
@@ -280,16 +285,40 @@ func (n *Notifier) buildSmallDiffCoordinateLines(limit int) []string {
 	if n == nil || n.monitor == nil || limit <= 0 {
 		return nil
 	}
-	images := n.monitor.GetLatestImages()
-	if images == nil || len(images.DiffImage) == 0 {
+	ts, diffLen := n.monitor.GetLatestDiffImageMeta()
+	if diffLen == 0 {
 		return nil
 	}
 
-	lines, err := smallDiffCoordinateLines(images.DiffImage, limit)
+	n.smallDiffCacheMu.Lock()
+	if n.smallDiffCacheLimit == limit &&
+		n.smallDiffCacheDiffLen == diffLen &&
+		!n.smallDiffCacheTS.IsZero() &&
+		n.smallDiffCacheTS.Equal(ts) {
+		lines := append([]string(nil), n.smallDiffCacheLines...)
+		n.smallDiffCacheMu.Unlock()
+		return lines
+	}
+	n.smallDiffCacheMu.Unlock()
+
+	diffImage, imageTS := n.monitor.GetLatestDiffImage()
+	if len(diffImage) == 0 {
+		return nil
+	}
+
+	lines, err := smallDiffCoordinateLines(diffImage, limit)
 	if err != nil {
 		log.Printf("small_diff: failed to build coordinate lines: %v", err)
 		return nil
 	}
+
+	n.smallDiffCacheMu.Lock()
+	n.smallDiffCacheTS = imageTS
+	n.smallDiffCacheDiffLen = len(diffImage)
+	n.smallDiffCacheLimit = limit
+	n.smallDiffCacheLines = append([]string(nil), lines...)
+	n.smallDiffCacheMu.Unlock()
+
 	return lines
 }
 

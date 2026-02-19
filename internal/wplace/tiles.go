@@ -35,7 +35,7 @@ type tileCacheEntry struct {
 }
 
 var tileCache struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	items map[string]tileCacheEntry
 }
 
@@ -130,49 +130,81 @@ func downloadTilesGrid(
 
 	total := cols * rows
 	tiles := make([][]byte, total)
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	for y := 0; y < rows; y++ {
-		for x := 0; x < cols; x++ {
-			tileX := minX + x
-			tileY := minY + y
-			idx := y*cols + x
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(ix, iy, index int) {
-				defer wg.Done()
-				defer func() { <-sem }()
+	type tileJob struct {
+		tileX int
+		tileY int
+		index int
+	}
+
+	workers := maxConcurrent
+	if workers > total {
+		workers = total
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+
+	jobs := make(chan tileJob, workers)
+	var workerWG sync.WaitGroup
+
+	setFirstErr := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		mu.Unlock()
+	}
+
+	for i := 0; i < workers; i++ {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			for job := range jobs {
 				if ctx.Err() != nil {
 					return
 				}
+
 				reqCtx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
 				var data []byte
 				var err error
 				if useCache {
-					data, err = DownloadTile(reqCtx, limiter, ix, iy)
+					data, err = DownloadTile(reqCtx, limiter, job.tileX, job.tileY)
 				} else {
-					data, err = DownloadTileNoCache(reqCtx, limiter, ix, iy)
+					data, err = DownloadTileNoCache(reqCtx, limiter, job.tileX, job.tileY)
 				}
 				cancelReq()
 				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-						cancel()
-					}
-					mu.Unlock()
+					setFirstErr(err)
 					return
 				}
-				tiles[index] = data
-			}(tileX, tileY, idx)
+				tiles[job.index] = data
+			}
+		}()
+	}
+
+enqueueLoop:
+	for y := 0; y < rows; y++ {
+		for x := 0; x < cols; x++ {
+			select {
+			case <-ctx.Done():
+				break enqueueLoop
+			case jobs <- tileJob{
+				tileX: minX + x,
+				tileY: minY + y,
+				index: y*cols + x,
+			}:
+			}
 		}
 	}
-	wg.Wait()
+	close(jobs)
+	workerWG.Wait()
+
 	if firstErr != nil {
 		return nil, firstErr
 	}
@@ -246,14 +278,22 @@ func CombineTilesCroppedImage(
 }
 
 func getTileFromCache(key string) ([]byte, bool) {
-	tileCache.mu.Lock()
-	defer tileCache.mu.Unlock()
+	now := time.Now()
+
+	tileCache.mu.RLock()
 	entry, ok := tileCache.items[key]
+	tileCache.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
-	if time.Now().After(entry.expiresAt) {
-		delete(tileCache.items, key)
+
+	if now.After(entry.expiresAt) {
+		tileCache.mu.Lock()
+		latest, ok := tileCache.items[key]
+		if ok && now.After(latest.expiresAt) {
+			delete(tileCache.items, key)
+		}
+		tileCache.mu.Unlock()
 		return nil, false
 	}
 	return entry.data, true

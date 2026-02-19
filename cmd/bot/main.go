@@ -52,9 +52,9 @@ func main() {
 	dataDir := filepath.Dir(settingsPath)
 
 	// レートリミッターの初期化
-	limiter := utils.NewRateLimiter(3)
+	limiter := utils.NewRateLimiter(2)
 	defer limiter.Close()
-	activityLimiter := utils.NewRateLimiter(3)
+	activityLimiter := utils.NewRateLimiter(2)
 	defer activityLimiter.Close()
 
 	// ユーザー活動トラッカーの初期化

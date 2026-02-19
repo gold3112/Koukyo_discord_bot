@@ -37,7 +37,7 @@ type result struct {
 // NewRateLimiter 新しいレートリミッターを作成
 func NewRateLimiter(rps int) *RateLimiter {
 	if rps <= 0 {
-		rps = 3
+		rps = 2
 	}
 	return &RateLimiter{
 		rps:        rps,

@@ -31,28 +31,87 @@ func monitorDebugf(format string, args ...interface{}) {
 
 // Monitor WebSocket監視クライアント
 type Monitor struct {
-	URL               string
-	State             *MonitorState
-	conn              *websocket.Conn
-	ctx               context.Context
-	cancel            context.CancelFunc
-	connected         bool
-	mu                sync.RWMutex
-	writeMu           sync.Mutex
-	reconnectMu       sync.Mutex
-	lastIdleReconnect time.Time
-	tracker           *activity.Tracker
-	lastMu            sync.Mutex
-	lastMsgAt         time.Time
+	URL                string
+	State              *MonitorState
+	conn               *websocket.Conn
+	ctx                context.Context
+	cancel             context.CancelFunc
+	connected          bool
+	mu                 sync.RWMutex
+	writeMu            sync.Mutex
+	reconnectMu        sync.Mutex
+	lastIdleReconnect  time.Time
+	tracker            *activity.Tracker
+	lastMu             sync.Mutex
+	lastMsgAt          time.Time
 	wsUnavailableSince time.Time
-	reconnectAttempts int
-	reconnectBackoff  time.Duration
-	pollURL           string
-	pollClient        *http.Client
-	pollBaseInterval  time.Duration
-	pollMu            sync.Mutex
-	pollAttempts      int
-	pollNextAttemptAt time.Time
+	reconnectAttempts  int
+	reconnectBackoff   time.Duration
+	pollURL            string
+	pollClient         *http.Client
+	pollBaseInterval   time.Duration
+	pollMu             sync.Mutex
+	pollAttempts       int
+	pollNextAttemptAt  time.Time
+}
+
+type monitorTextPayload struct {
+	Type                     string   `json:"type"`
+	Message                  string   `json:"message,omitempty"`
+	DiffPercentage           *float64 `json:"diff_percentage"`
+	DiffPixels               *int     `json:"diff_pixels"`
+	WeightedDiffPercentage   *float64 `json:"weighted_diff_percentage"`
+	WeightedDiffColor        string   `json:"weighted_diff_color,omitempty"`
+	ChrysanthemumDiffPixels  *int     `json:"chrysanthemum_diff_pixels"`
+	BackgroundDiffPixels     *int     `json:"background_diff_pixels"`
+	ChrysanthemumTotalPixels *int     `json:"chrysanthemum_total_pixels"`
+	BackgroundTotalPixels    *int     `json:"background_total_pixels"`
+	TotalPixels              *int     `json:"total_pixels"`
+}
+
+func (p *monitorTextPayload) hasMonitoringData() bool {
+	if p == nil {
+		return false
+	}
+	return p.DiffPercentage != nil || p.DiffPixels != nil || p.Type == "metadata"
+}
+
+func (p *monitorTextPayload) toMonitorData() *MonitorData {
+	if p == nil {
+		return nil
+	}
+
+	data := &MonitorData{
+		Type:              p.Type,
+		Message:           p.Message,
+		WeightedDiffColor: p.WeightedDiffColor,
+	}
+	if p.DiffPercentage != nil {
+		data.DiffPercentage = *p.DiffPercentage
+	}
+	if p.DiffPixels != nil {
+		data.DiffPixels = *p.DiffPixels
+	}
+	if p.WeightedDiffPercentage != nil {
+		weighted := *p.WeightedDiffPercentage
+		data.WeightedDiffPercentage = &weighted
+	}
+	if p.ChrysanthemumDiffPixels != nil {
+		data.ChrysanthemumDiffPixels = *p.ChrysanthemumDiffPixels
+	}
+	if p.BackgroundDiffPixels != nil {
+		data.BackgroundDiffPixels = *p.BackgroundDiffPixels
+	}
+	if p.ChrysanthemumTotalPixels != nil {
+		data.ChrysanthemumTotalPixels = *p.ChrysanthemumTotalPixels
+	}
+	if p.BackgroundTotalPixels != nil {
+		data.BackgroundTotalPixels = *p.BackgroundTotalPixels
+	}
+	if p.TotalPixels != nil {
+		data.TotalPixels = *p.TotalPixels
+	}
+	return data
 }
 
 // NewMonitor 新しいMonitorを作成
@@ -513,29 +572,24 @@ func (m *Monitor) handleMessage(messageType int, message []byte) error {
 
 // handleTextMessage JSONメッセージを処理
 func (m *Monitor) handleTextMessage(message []byte) error {
-	var raw map[string]interface{}
-	if err := json.Unmarshal(message, &raw); err != nil {
+	var payload monitorTextPayload
+	if err := json.Unmarshal(message, &payload); err != nil {
 		return err
 	}
 
 	// エラーメッセージの場合
-	if rawType, ok := raw["type"].(string); ok && rawType == "error" {
-		if msg, ok := raw["message"].(string); ok {
-			log.Printf("Server error: %s", msg)
+	if payload.Type == "error" {
+		if payload.Message != "" {
+			log.Printf("Server error: %s", payload.Message)
 		} else {
-			log.Printf("Server error: %v", raw["message"])
+			log.Printf("Server error payload: %s", string(message))
 		}
 		return nil
 	}
 
-	_, hasDiff := raw["diff_percentage"]
-	_, hasPixels := raw["diff_pixels"]
-	if hasDiff || hasPixels || raw["type"] == "metadata" {
-		var data MonitorData
-		if err := json.Unmarshal(message, &data); err != nil {
-			return err
-		}
-		m.State.UpdateData(&data)
+	if payload.hasMonitoringData() {
+		data := payload.toMonitorData()
+		m.State.UpdateData(data)
 		monitorDebugf("Updated: Diff=%.2f%%, Weighted=%.2f%%",
 			data.DiffPercentage,
 			getWeightedValue(data.WeightedDiffPercentage))
@@ -649,6 +703,27 @@ func (m *Monitor) GetLatestImages() *ImageData {
 		DiffImage: append([]byte(nil), m.State.LatestImages.DiffImage...),
 		Timestamp: m.State.LatestImages.Timestamp,
 	}
+}
+
+// GetLatestDiffImage returns a copy of the latest diff image only.
+func (m *Monitor) GetLatestDiffImage() ([]byte, time.Time) {
+	m.State.mu.RLock()
+	defer m.State.mu.RUnlock()
+	if m.State.LatestImages == nil || len(m.State.LatestImages.DiffImage) == 0 {
+		return nil, time.Time{}
+	}
+	diffCopy := append([]byte(nil), m.State.LatestImages.DiffImage...)
+	return diffCopy, m.State.LatestImages.Timestamp
+}
+
+// GetLatestDiffImageMeta returns timestamp and size for cache-keying without copying image bytes.
+func (m *Monitor) GetLatestDiffImageMeta() (time.Time, int) {
+	m.State.mu.RLock()
+	defer m.State.mu.RUnlock()
+	if m.State.LatestImages == nil {
+		return time.Time{}, 0
+	}
+	return m.State.LatestImages.Timestamp, len(m.State.LatestImages.DiffImage)
 }
 
 // Stop 監視を停止
