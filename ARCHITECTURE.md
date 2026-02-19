@@ -1,361 +1,168 @@
 # 技術ドキュメント - Koukyo Discord Bot (Go Edition)
 
-## 🏗️ アーキテクチャ概要
+## 概要
 
-### レイヤー構造
+本Botは `wplace` の差分監視結果を Discord に通知する Go 実装です。  
+WebSocket 監視を主経路にしつつ、回線不良時には HTTP poll / standalone 取得へ段階的にフォールバックします。
 
-```
-┌─────────────────────────────────────────┐
-│   cmd/bot/main.go (エントリーポイント)     │
-└─────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────┐
-│  internal/handler (イベントハンドラー)     │
-│  - OnReady, OnMessage, OnInteraction    │
-└─────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────┐
-│  internal/commands (コマンドレジストリ)    │
-│  - 統一インターフェース                    │
-│  - テキスト/スラッシュ両対応               │
-└─────────────────────────────────────────┘
-          ↓                        ↓
-┌──────────────────┐    ┌──────────────────┐
-│  internal/embeds │    │  internal/utils  │
-│  (表示ロジック)    │    │  (ビジネスロジック)│
-└──────────────────┘    └──────────────────┘
-          ↓                        ↓
-┌─────────────────────────────────────────┐
-│       internal/models (データモデル)       │
-└─────────────────────────────────────────┘
-```
-
-## 📦 モジュール詳細
-
-### 1. `cmd/bot` - アプリケーションエントリーポイント
-
-**責務:**
-- アプリケーションの初期化
-- Discord セッションの確立
-- グレースフルシャットダウン
-
-**主要コンポーネント:**
-```go
-const BotVersion = "1.0.0-go"
-
-func main() {
-    // 1. 設定読み込み
-    cfg := config.Load()
-    
-    // 2. Bot情報初期化
-    botInfo := models.NewBotInfo(BotVersion)
-    
-    // 3. ハンドラー登録
-    h := handler.NewHandler("!", botInfo)
-    
-    // 4. Discord接続
-    dg.Open()
-}
-```
-
-### 2. `internal/handler` - イベント処理
-
-**責務:**
-- Discordイベントの受信と振り分け
-- スラッシュコマンドの同期
-- コマンドレジストリの管理
-
-**主要メソッド:**
-- `OnReady()` - Bot起動時の初期化
-- `OnMessage()` - テキストコマンドの処理
-- `OnInteractionCreate()` - スラッシュコマンドの処理
-- `SyncSlashCommands()` - スラッシュコマンドの登録
-- `Cleanup()` - 終了時のクリーンアップ
-
-### 3. `internal/commands` - コマンドシステム
-
-#### コマンドインターフェース
-```go
-type Command interface {
-    Name() string
-    Description() string
-    ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error
-    ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error
-    SlashDefinition() *discordgo.ApplicationCommand
-}
-```
-
-#### 実装済みコマンド一覧
-
-| コマンド | ファイル | 説明 | 依存モジュール |
-|---------|---------|------|--------------|
-| `ping` | `ping.go` | 疎通確認 | なし |
-| `help` | `help.go` | コマンド一覧 | `Registry` |
-| `info` | `info.go` | Bot情報 | `models.BotInfo`, `embeds` |
-| `now` | `now.go` | 監視状況 | `embeds` |
-| `time` | `time.go` | 現在時刻 | `embeds`, `utils.timezone` |
-| `convert` | `convert.go` | 座標変換 | `embeds`, `utils.coordinator` |
-
-#### Registry パターン
-
-```go
-type Registry struct {
-    commands map[string]Command
-}
-
-// コマンドの登録
-registry.Register(&commands.PingCommand{})
-registry.Register(commands.NewInfoCommand(botInfo))
-
-// コマンドの取得
-cmd, exists := registry.Get("ping")
-```
-
-### 4. `internal/utils` - ユーティリティモジュール
-
-#### `coordinator.go` - 座標変換システム
-
-**定数:**
-```go
-const (
-    WplaceZoom = 11          // ズームレベル
-    WplaceTileSize = 1000    // タイル1枚のサイズ
-    WplaceTilesPerEdge = 2048 // 1辺のタイル数
-)
-```
-
-**主要関数:**
-- `LngLatToTilePixel(lng, lat)` - 経度緯度 → ピクセル座標
-- `TilePixelToLngLat(tileX, tileY, pixelX, pixelY)` - ピクセル座標 → 経度緯度
-- `BuildWplaceURL(lng, lat, zoom)` - Wplace URL生成
-- `FormatHyphenCoords(coord)` - ハイフン形式文字列生成
-
-**座標変換アルゴリズム:**
-1. **Webメルカトル投影** を使用
-2. 経度: 線形変換 `(lng + 180) / 360 * n`
-3. 緯度: 双曲線正接を使った非線形変換 `asinh(tan(lat))`
-
-#### `timezone.go` - タイムゾーン処理
-
-**サポートタイムゾーン:**
-- UTC (協定世界時)
-- America/Los_Angeles (サンタクララ PST/PDT)
-- Europe/Paris (フランス CET/CEST)
-- Asia/Tokyo (日本標準時 JST)
-
-**主要関数:**
-- `GetCommonTimezones()` - よく使うタイムゾーン一覧取得
-- `ParseTimezone(tzName)` - 短縮形からLocation取得
-- `FormatTimeInTimezone(t, loc)` - 指定タイムゾーンでフォーマット
-
-### 5. `internal/embeds` - 埋め込みメッセージ生成
-
-**責務:**
-- Discord Embed の構築
-- 一貫したビジュアルスタイル
-- エラーメッセージの統一
-
-**主要関数:**
-| 関数 | 用途 | カラー |
-|------|------|--------|
-| `BuildInfoEmbed()` | Bot情報 | Gold (0xFFD700) |
-| `BuildTimeEmbed()` | 現在時刻 | Blue (0x3498DB) |
-| `BuildConvertLngLatEmbed()` | 座標変換（経度緯度→ピクセル） | Purple (0x9B59B6) |
-| `BuildConvertPixelEmbed()` | 座標変換（ピクセル→経度緯度） | Turquoise (0x1ABC9C) |
-| `BuildNowEmbed()` | 監視状況 | Blue (0x3498DB) |
-
-### 6. `internal/models` - データモデル
-
-#### `BotInfo` 構造体
-```go
-type BotInfo struct {
-    Version   string
-    StartTime time.Time
-}
-
-func (b *BotInfo) Uptime() time.Duration
-```
-
-**役割:**
-- Bot起動時刻の記録
-- 稼働時間の計算
-- バージョン情報の保持
-
-### 7. `internal/config` - 設定管理
-
-**現在の実装:**
-```go
-type Config struct {
-    Token string  // 環境変数 DISCORD_TOKEN から読み込み
-}
-```
-
-**今後の拡張:**
-- JSON設定ファイルのサポート
-- サーバーごとの設定管理
-- データベース接続情報
-
-## 🔄 コマンド実行フロー
-
-### テキストコマンドの場合
+## システム構成
 
 ```
-1. ユーザーが "!convert 139.7794 35.6833" と入力
-   ↓
-2. handler.OnMessage() がメッセージを受信
-   ↓
-3. プレフィックス "!" をチェック
-   ↓
-4. コマンド名 "convert" と引数 ["139.7794", "35.6833"] をパース
-   ↓
-5. registry.Get("convert") でコマンド取得
-   ↓
-6. cmd.ExecuteText(s, m, args) を実行
-   ↓
-7. convert.go 内で引数をパース
-   ↓
-8. utils.LngLatToTilePixel() で座標変換
-   ↓
-9. embeds.BuildConvertLngLatEmbed() で埋め込み生成
-   ↓
-10. Discordチャンネルに送信
+cmd/bot/main.go
+  -> internal/monitor      (WS受信・状態管理・履歴/日次集計)
+  -> internal/notifications (通知判定・送信ディスパッチ・日次配信)
+  -> internal/activity      (ユーザー活動集計)
+  -> internal/handler       (テキスト/スラッシュコマンド分岐)
+  -> internal/commands      (各コマンド実装)
+  -> internal/embeds        (画像/Embed生成)
+  -> internal/wplace        (タイル取得・画像合成)
+  -> internal/utils         (座標変換・URL生成・レート制御など)
 ```
 
-### スラッシュコマンドの場合
+## 起動フロー
 
-```
-1. ユーザーが "/convert lng:139.7794 lat:35.6833" を実行
-   ↓
-2. handler.OnInteractionCreate() がInteractionを受信
-   ↓
-3. コマンド名 "convert" を取得
-   ↓
-4. registry.Get("convert") でコマンド取得
-   ↓
-5. cmd.ExecuteSlash(s, i) を実行
-   ↓
-6. オプションマップから lng, lat を取得
-   ↓
-7. utils.LngLatToTilePixel() で座標変換
-   ↓
-8. embeds.BuildConvertLngLatEmbed() で埋め込み生成
-   ↓
-9. InteractionRespond で応答
-```
+1. `cmd/bot/main.go` が設定を読み込み、`SettingsManager` を初期化。
+2. `RateLimiter` を2系統で初期化（監視系/活動系とも既定 `2 RPS`）。
+3. `Monitor` を起動し、WSループ群を開始。
+4. `Notifier.StartMonitoring()` を開始。
+5. Discord イベントハンドラ（メッセージ/スラッシュ）を登録して接続。
 
-## 🐳 Docker構成
+## Monitor層
 
-### マルチステージビルド
+主要ファイル: `internal/monitor/monitor.go`, `internal/monitor/state.go`
 
-```dockerfile
-# Stage 1: ビルド
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod tidy && go build -o bot ./cmd/bot
+### 役割
 
-# Stage 2: 実行環境
-FROM alpine:latest
-WORKDIR /app
-COPY --from=builder /app/bot ./bot
-CMD ["./bot"]
-```
+- WebSocket のテキスト/バイナリ受信
+- 差分データ・画像の最新状態管理
+- 差分履歴、タイムラプスフレーム、ヒートマップ、日次サマリ保持
+- 電文断検知と再接続制御
 
-**メリット:**
-- 最終イメージサイズが小さい（約15MB）
-- ビルドツールが含まれない
-- セキュリティリスクの低減
+### 常駐ループ
 
-### Docker Compose
+- `receiveLoop`: 受信本体。切断時は指数バックオフ再接続。
+- `pingLoop`: WS Ping 制御。
+- `keepaliveLoop`: テキスト keepalive。
+- `idleWatchLoop`: 長時間無受信を検知し強制再接続。
+- `pollFallbackLoop`: WS 断が一定時間継続した時に HTTP から監視データ取得。
 
-```yaml
-services:
-  discord-bot:
-    build: .
-    env_file:
-      - .env
-    restart: unless-stopped
-```
+### 実装ポイント
 
-## 🧪 テスト戦略（今後実装予定）
+- テキスト受信は `monitorTextPayload` で単一 Unmarshal。
+- `MonitorState` は `RWMutex` で保護。
+- 日次ピーク画像・日次集計は JST 日付キーで保存。
+- 直近7日分の `DailySummaries` を保持しメモリ上限を管理。
 
-### ユニットテスト
-```go
-// utils/coordinator_test.go
-func TestLngLatToTilePixel(t *testing.T) {
-    // 東京（皇居）の座標テスト
-    coord := LngLatToTilePixel(139.7594, 35.6850)
-    // 期待値と比較
-}
-```
+## Notification層
 
-### インテグレーションテスト
-- モックDiscordセッションを使ったコマンドテスト
-- エンドツーエンドのコマンド実行フロー検証
+主要ファイル: `internal/notifications/notifier.go`, `internal/notifications/notifier_monitoring.go`
 
-## 📈 パフォーマンス考慮事項
+### 役割
 
-### メモリ効率
-- 構造体のポインタ渡しを活用
-- 不要なコピーを避ける
-- Embed生成時の文字列連結を最適化
+- サーバーごとの通知判定（Tier上昇/下降、0%復帰/完了）
+- small diff 特別フロー（テキスト更新）
+- 追加監視 / 進捗監視 / 日次ランキング / タイムラプス自動投稿
+- 送信処理の非同期化
 
-### 並行処理
-- Goのgoroutineを活用（今後のWebSocket監視で使用予定）
-- チャネルによる安全な通信
+### ディスパッチ設計
 
-### レート制限対策
-- Discord API のレート制限を考慮
-- リクエストキューイング（今後実装）
+- `dispatchHigh`: 高優先度キュー（FIFO）
+- `dispatchLow`: 低優先度キュー（キー単位でcoalescing）
+- キュー飽和時は通知をドロップし、監視ループを止めない
 
-## 🔐 セキュリティ
+### small diff フロー
 
-### 環境変数管理
-- `.env` ファイルを `.gitignore` に追加
-- Dockerコンテナに直接埋め込まない
-- `env_file` で安全に渡す
+- 条件: `DiffPixels` が `1..10`（`smallDiffPixelLimit=10`）
+- Embedではなく単一テキスト通知を `edit` で更新
+- 差分座標を `- (tileX-tileY-pixelX-pixelY:URL)` 形式で列挙
+- URLは `BuildWplaceHighDetailPixelURL`（`/me` と同系統の高倍率リンク）
+- 省電力モードの入退出時にメッセージ追跡IDをリセットし、古い通知の誤編集を防止
 
-### 入力検証
-- スラッシュコマンドのオプション型チェック
-- 座標範囲のバリデーション（今後追加予定）
+### フォールバック監視
 
-## 🚀 今後の実装予定
+主要ファイル: `internal/notifications/notifier_standalone_fallback.go`
 
-### Phase 2: ユーザー追跡
-```go
-// internal/storage/activity.go
-type ActivityTracker struct {
-    vandals   map[string]*UserActivity
-    restorers map[string]*UserActivity
-}
-```
+- WS断が1分継続時に standalone 監視へ切替
+- ターゲット解決順:
+  - `MONITOR_STANDALONE_TARGET_ID`（watch_targets参照）
+  - `MONITOR_STANDALONE_ORIGIN` / `MONITOR_STANDALONE_TEMPLATE`
+  - 既定値
+- standalone失敗時は指数バックオフ
 
-### Phase 3: WebSocket監視
-```go
-// internal/monitor/websocket.go
-type Monitor struct {
-    ws     *websocket.Conn
-    images chan *ImageData
-}
-```
+## 追加監視 / 進捗監視
 
-### Phase 4: 統計分析
-```go
-// internal/analytics/stats.go
-type StatisticsEngine struct {
-    history []DiffRecord
-}
-```
+主要ファイル:
+- `internal/notifications/notifier_watch_targets.go`
+- `internal/notifications/notifier_progress_targets.go`
+- `internal/notifications/target_common.go`
 
-## 📚 参考資料
+### 仕様
 
-- [discordgo ドキュメント](https://github.com/bwmarrin/discordgo)
-- [Discord API リファレンス](https://discord.com/developers/docs)
-- [Webメルカトル投影](https://en.wikipedia.org/wiki/Web_Mercator_projection)
-- [Go プロジェクトレイアウト](https://github.com/golang-standards/project-layout)
+- `watch_targets.json` / `progress_targets.json` をTTL付きで再読込
+- テンプレート画像は `template_img` から読み込み、更新時刻でキャッシュ
+- ターゲット取得は並列数上限付きで実行
+
+### エラー通知方針
+
+- 回線不良時のノイズ抑制のため、追加監視/進捗監視のエラーは Discord 通知しない
+- エラーはローカルログへ出力（`suppressed error notification`）
+
+## 画像取得/合成層
+
+主要ファイル: `internal/wplace/tiles.go`
+
+### 仕様
+
+- タイルHTTP取得は接続プールを持つ専用 `http.Client`
+- タイルキャッシュ（TTL 2分）
+- グリッド取得はワーカープール方式で実行
+- `CombineTilesCroppedImage` で必要範囲のみ合成
+
+### 最適化
+
+- 以前の「タイルごとにgoroutine生成」から固定ワーカー数へ変更
+- キャッシュロックを `RWMutex` 化し read-heavy パスを軽量化
+
+## 時刻/日次処理
+
+- グラフ時刻軸: JST
+- タイムラプス表示時刻: JST
+- 日次ランキング送信タイミング: JST日付境界
+- 日次サマリ集計キー: JST
+
+主要ファイル:
+- `internal/commands/graph.go`
+- `internal/commands/timelapse.go`
+- `internal/embeds/graphs.go`
+- `internal/notifications/notifier_daily_ranking.go`
+
+## マルチギルド配信
+
+日次ランキングの添付画像はギルドごとに個別送信されます。  
+同一バッファの使い回しで「最初の1サーバーのみ添付される」問題を回避するため、送信ごとに `Reader` を作り直す実装です。
+
+## データ保存
+
+主な永続ファイル:
+
+- `data/settings.json`
+- `data/user_activity.json`
+- `data/vandalized_pixels.json`
+- `data/vandal_daily.json`
+- `data/watch_targets.json`
+- `data/progress_targets.json`
+- `data/template_img/*`
+
+## テスト
+
+主要テスト対象:
+
+- 座標/URL変換: `internal/utils/*_test.go`
+- small diff 座標抽出: `internal/notifications/notifier_small_diff_coords_test.go`
+- 日次ランキング/画像添付: `internal/notifications/notifier_daily_ranking_test.go`
+- グラフJST表示: `internal/embeds/graphs_test.go`
+- monitorテキストpayload解析: `internal/monitor/monitor_text_payload_test.go`
 
 ---
 
-**最終更新:** 2026-01-22  
-**バージョン:** 1.0.0-go  
-**作成者:** Koukyo Bot Development Team
+最終更新: 2026-02-19
