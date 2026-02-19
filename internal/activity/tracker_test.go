@@ -103,26 +103,33 @@ func TestRecordRecentEventsCapped(t *testing.T) {
 	}
 }
 
-func TestClaimDeferredPixels(t *testing.T) {
+func TestClaimCurrentDiffPixelsSkipsBaseline(t *testing.T) {
 	t.Parallel()
 
-	state := powerSaveInferenceState{Active: true}
-	deferPowerSaveInferencePixel(&state, Pixel{AbsX: 10, AbsY: 20})
-	deferPowerSaveInferencePixel(&state, Pixel{AbsX: 11, AbsY: 21})
+	current := map[string]Pixel{
+		pixelKey(10, 20): {AbsX: 10, AbsY: 20},
+		pixelKey(11, 21): {AbsX: 11, AbsY: 21},
+		pixelKey(12, 22): {AbsX: 12, AbsY: 22},
+	}
+	baseline := map[string]Pixel{
+		pixelKey(10, 20): {AbsX: 10, AbsY: 20},
+	}
+	vs := &VandalState{PixelToPainter: map[string]string{
+		pixelKey(10, 20): "base-user",
+	}}
 
-	vs := &VandalState{PixelToPainter: map[string]string{}}
-	claimed := claimDeferredPixels(&state, "1001", vs)
+	claimed := claimCurrentDiffPixels(current, "1001", vs, baseline)
 	if claimed != 2 {
-		t.Fatalf("expected claimed deferred pixels=2, got %d", claimed)
+		t.Fatalf("expected claimed pixels=2 (excluding baseline), got %d", claimed)
 	}
-	if len(state.DeferredPixels) != 0 {
-		t.Fatalf("deferred pixels should be cleared after claim")
-	}
-	if got := vs.PixelToPainter[pixelKey(10, 20)]; got != "1001" {
-		t.Fatalf("unexpected painter for first deferred pixel: %q", got)
+	if got := vs.PixelToPainter[pixelKey(10, 20)]; got != "base-user" {
+		t.Fatalf("baseline pixel should be untouched, got %q", got)
 	}
 	if got := vs.PixelToPainter[pixelKey(11, 21)]; got != "1001" {
-		t.Fatalf("unexpected painter for second deferred pixel: %q", got)
+		t.Fatalf("unexpected painter for pixel(11,21): %q", got)
+	}
+	if got := vs.PixelToPainter[pixelKey(12, 22)]; got != "1001" {
+		t.Fatalf("unexpected painter for pixel(12,22): %q", got)
 	}
 }
 
@@ -156,8 +163,8 @@ func TestUpdateDiffImageInferenceQueuesSingleProbe(t *testing.T) {
 	if !tracker.powerSaveInference.ProbeQueued {
 		t.Fatalf("expected ProbeQueued=true after first update")
 	}
-	if got := len(tracker.powerSaveInference.DeferredPixels); got != 2 {
-		t.Fatalf("expected 2 deferred pixels, got %d", got)
+	if got := tracker.powerSaveInference.RemainingPixels; got != 3 {
+		t.Fatalf("expected remaining inference pixels 3, got %d", got)
 	}
 	tracker.mu.Unlock()
 
@@ -175,8 +182,198 @@ func TestUpdateDiffImageInferenceQueuesSingleProbe(t *testing.T) {
 		t.Fatalf("expected still 1 queued probe after second update, got %d", got)
 	}
 	tracker.mu.Lock()
-	if got := len(tracker.powerSaveInference.DeferredPixels); got != 3 {
-		t.Fatalf("expected deferred pixels to grow to 3, got %d", got)
+	if got := tracker.powerSaveInference.RemainingPixels; got != 4 {
+		t.Fatalf("expected remaining inference pixels to track current diff(4), got %d", got)
+	}
+	tracker.mu.Unlock()
+}
+
+func TestUpdateDiffImageInferenceAutoArmsOnMonotonicGrowth(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(Config{
+		TopLeftTileX:  0,
+		TopLeftTileY:  0,
+		TopLeftPixelX: 0,
+		TopLeftPixelY: 0,
+		Width:         3,
+		Height:        3,
+	}, nil, "")
+
+	first := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+	})
+	if err := tracker.UpdateDiffImage(first); err != nil {
+		t.Fatalf("UpdateDiffImage(first) returned error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if tracker.powerSaveInference.Active {
+		t.Fatalf("inference should not auto-arm for added=1")
+	}
+	tracker.mu.Unlock()
+
+	second := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+		{1, 0}: true,
+		{0, 1}: true,
+	})
+	if err := tracker.UpdateDiffImage(second); err != nil {
+		t.Fatalf("UpdateDiffImage(second) returned error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if !tracker.powerSaveInference.Active {
+		t.Fatalf("expected inference auto-arm on monotonic growth")
+	}
+	if !tracker.powerSaveInference.ProbeQueued {
+		t.Fatalf("expected single probe to be queued")
+	}
+	if got := tracker.powerSaveInference.BaselinePixels; got != 1 {
+		t.Fatalf("expected baseline pixels=1, got %d", got)
+	}
+	if got := tracker.powerSaveInference.RemainingPixels; got != 2 {
+		t.Fatalf("expected remaining inferred pixels=2, got %d", got)
+	}
+	tracker.mu.Unlock()
+}
+
+func TestUpdateDiffImageInferenceResetsWhenRestoreAppears(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(Config{
+		TopLeftTileX:  0,
+		TopLeftTileY:  0,
+		TopLeftPixelX: 0,
+		TopLeftPixelY: 0,
+		Width:         3,
+		Height:        3,
+	}, nil, "")
+
+	tracker.ArmPowerSaveResumeInference(3)
+	first := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+		{1, 0}: true,
+		{0, 1}: true,
+	})
+	if err := tracker.UpdateDiffImage(first); err != nil {
+		t.Fatalf("UpdateDiffImage(first) returned error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if !tracker.powerSaveInference.Active {
+		t.Fatalf("expected inference active after first update")
+	}
+	tracker.mu.Unlock()
+
+	// remove one vandalized pixel -> inference assumption must be cleared.
+	second := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+		{1, 0}: true,
+	})
+	if err := tracker.UpdateDiffImage(second); err != nil {
+		t.Fatalf("UpdateDiffImage(second) returned error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if tracker.powerSaveInference.Active {
+		t.Fatalf("expected inference reset when restore appears")
+	}
+	tracker.mu.Unlock()
+}
+
+func TestUpdateDiffImageRestoreInferenceAutoArmsOnMonotonicShrink(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(Config{
+		TopLeftTileX:  0,
+		TopLeftTileY:  0,
+		TopLeftPixelX: 0,
+		TopLeftPixelY: 0,
+		Width:         3,
+		Height:        3,
+	}, nil, "")
+
+	tracker.mu.Lock()
+	tracker.currentDiff = map[string]Pixel{
+		pixelKey(0, 0): {AbsX: 0, AbsY: 0},
+		pixelKey(1, 0): {AbsX: 1, AbsY: 0},
+		pixelKey(0, 1): {AbsX: 0, AbsY: 1},
+	}
+	tracker.mu.Unlock()
+
+	shrink := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+	})
+	if err := tracker.UpdateDiffImage(shrink); err != nil {
+		t.Fatalf("UpdateDiffImage(shrink) returned error: %v", err)
+	}
+
+	if got := len(tracker.queue); got != 1 {
+		t.Fatalf("expected queue length 1 (restore probe only), got %d", got)
+	}
+
+	tracker.mu.Lock()
+	if !tracker.restoreInference.Active {
+		t.Fatalf("expected restore inference auto-arm on monotonic shrink")
+	}
+	if !tracker.restoreInference.ProbeQueued {
+		t.Fatalf("expected restore probe to be queued")
+	}
+	if got := tracker.restoreInference.BaselinePixels; got != 3 {
+		t.Fatalf("expected restore baseline pixels=3, got %d", got)
+	}
+	if got := tracker.restoreInference.RemainingPixels; got != 2 {
+		t.Fatalf("expected remaining restored pixels=2, got %d", got)
+	}
+	tracker.mu.Unlock()
+}
+
+func TestUpdateDiffImageRestoreInferenceResetsWhenVandalAppears(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(Config{
+		TopLeftTileX:  0,
+		TopLeftTileY:  0,
+		TopLeftPixelX: 0,
+		TopLeftPixelY: 0,
+		Width:         3,
+		Height:        3,
+	}, nil, "")
+
+	tracker.mu.Lock()
+	tracker.currentDiff = map[string]Pixel{
+		pixelKey(0, 0): {AbsX: 0, AbsY: 0},
+		pixelKey(1, 0): {AbsX: 1, AbsY: 0},
+		pixelKey(0, 1): {AbsX: 0, AbsY: 1},
+	}
+	tracker.mu.Unlock()
+
+	shrink := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+	})
+	if err := tracker.UpdateDiffImage(shrink); err != nil {
+		t.Fatalf("UpdateDiffImage(shrink) returned error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if !tracker.restoreInference.Active {
+		t.Fatalf("expected restore inference active after shrink")
+	}
+	tracker.mu.Unlock()
+
+	// add a new vandal diff while restore inference is pending -> inference must be cleared.
+	growth := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+		{2, 2}: true,
+	})
+	if err := tracker.UpdateDiffImage(growth); err != nil {
+		t.Fatalf("UpdateDiffImage(growth) returned error: %v", err)
+	}
+
+	tracker.mu.Lock()
+	if tracker.restoreInference.Active {
+		t.Fatalf("expected restore inference reset when added diff appears")
 	}
 	tracker.mu.Unlock()
 }
@@ -184,7 +381,17 @@ func TestUpdateDiffImageInferenceQueuesSingleProbe(t *testing.T) {
 func mustEncodeDiffPNG(t *testing.T, pixels map[[2]int]bool) []byte {
 	t.Helper()
 
-	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	maxX := 1
+	maxY := 1
+	for pos := range pixels {
+		if pos[0] > maxX {
+			maxX = pos[0]
+		}
+		if pos[1] > maxY {
+			maxY = pos[1]
+		}
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, maxX+1, maxY+1))
 	for pos := range pixels {
 		img.Set(pos[0], pos[1], color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	}

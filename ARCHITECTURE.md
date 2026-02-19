@@ -2,172 +2,195 @@
 
 ## 概要
 
-本Botは `wplace` の差分監視結果を Discord に通知する Go 実装です。  
-WebSocket 監視を主経路にしつつ、回線不良時には HTTP poll / standalone 取得へ段階的にフォールバックします。
+本Botは `wplace` の監視データを Discord へ通知する Go 実装です。  
+主経路は WebSocket 監視で、断線時には HTTP poll / standalone 比較へ段階フォールバックします。
 
-## システム構成
+監視・通知・活動集計を分離し、どこかの処理が遅延しても監視ループを止めない設計を採用しています。
+
+## モジュール構成
 
 ```
 cmd/bot/main.go
-  -> internal/monitor      (WS受信・状態管理・履歴/日次集計)
-  -> internal/notifications (通知判定・送信ディスパッチ・日次配信)
-  -> internal/activity      (ユーザー活動集計)
-  -> internal/handler       (テキスト/スラッシュコマンド分岐)
-  -> internal/commands      (各コマンド実装)
-  -> internal/embeds        (画像/Embed生成)
-  -> internal/wplace        (タイル取得・画像合成)
-  -> internal/utils         (座標変換・URL生成・レート制御など)
+  -> internal/monitor        WS受信 / 監視状態 / 履歴
+  -> internal/notifications  通知判定 / Discord送信 / 日次配信
+  -> internal/activity       diff画像ベースのユーザー活動推定
+  -> internal/handler        コマンドルーティング
+  -> internal/commands       各コマンド実装
+  -> internal/embeds         Embed/グラフ/タイムラプス画像生成
+  -> internal/wplace         タイル取得 / 画像合成
+  -> internal/utils          座標変換 / URL生成 / RateLimiter
 ```
 
-## 起動フロー
+## 起動シーケンス
 
-1. `cmd/bot/main.go` が設定を読み込み、`SettingsManager` を初期化。
-2. `RateLimiter` を2系統で初期化（監視系/活動系とも既定 `2 RPS`）。
-3. `Monitor` を起動し、WSループ群を開始。
-4. `Notifier.StartMonitoring()` を開始。
-5. Discord イベントハンドラ（メッセージ/スラッシュ）を登録して接続。
+1. `cmd/bot/main.go` で設定読込と Discord セッション初期化。
+2. 監視用と活動API用の `RateLimiter` をそれぞれ初期化（既定 2 RPS）。
+3. `Monitor` 起動（WS受信ループ群）。
+4. `Notifier.StartMonitoring()` 起動（通知判定/配信ループ群）。
+5. `Tracker.Start()` 起動（diff解析/活動集計）。
+6. スラッシュコマンド同期後、Discord 受信開始。
 
-## Monitor層
+## Monitor 層
 
 主要ファイル: `internal/monitor/monitor.go`, `internal/monitor/state.go`
 
 ### 役割
 
-- WebSocket のテキスト/バイナリ受信
-- 差分データ・画像の最新状態管理
-- 差分履歴、タイムラプスフレーム、ヒートマップ、日次サマリ保持
-- 電文断検知と再接続制御
+- WebSocket テキスト/バイナリの取り込み
+- 監視データ (`MonitorData`) と画像 (`ImageData`) の最新状態保持
+- 差分履歴、タイムラプスフレーム、日次サマリの蓄積
+- 無受信監視と再接続、断時フォールバック
 
 ### 常駐ループ
 
-- `receiveLoop`: 受信本体。切断時は指数バックオフ再接続。
-- `pingLoop`: WS Ping 制御。
-- `keepaliveLoop`: テキスト keepalive。
-- `idleWatchLoop`: 長時間無受信を検知し強制再接続。
-- `pollFallbackLoop`: WS 断が一定時間継続した時に HTTP から監視データ取得。
+- `receiveLoop` 受信本体（切断時は指数バックオフで再接続）
+- `pingLoop` WS ping
+- `keepaliveLoop` keepalive 送信
+- `idleWatchLoop` 無受信監視（長時間停止を検知）
+- `pollFallbackLoop` WS断継続時の HTTP 取得
 
 ### 実装ポイント
 
-- テキスト受信は `monitorTextPayload` で単一 Unmarshal。
-- `MonitorState` は `RWMutex` で保護。
-- 日次ピーク画像・日次集計は JST 日付キーで保存。
-- 直近7日分の `DailySummaries` を保持しメモリ上限を管理。
+- テキスト受信は `monitorTextPayload` に単一 `json.Unmarshal`。
+- `MonitorState` は `RWMutex` 保護。
+- 日次関連は JST キーで保存。
 
-## Notification層
+## Notification 層
 
 主要ファイル: `internal/notifications/notifier.go`, `internal/notifications/notifier_monitoring.go`
 
 ### 役割
 
-- サーバーごとの通知判定（Tier上昇/下降、0%復帰/完了）
-- small diff 特別フロー（テキスト更新）
-- 追加監視 / 進捗監視 / 日次ランキング / タイムラプス自動投稿
-- 送信処理の非同期化
+- Tier上昇/下降、完了通知、復帰通知の判定
+- small diff（1..10px）専用フロー
+- 追加監視/進捗監視の定期比較
+- 日次サマリ、日次ランキング、タイムラプス自動配信
 
 ### ディスパッチ設計
 
-- `dispatchHigh`: 高優先度キュー（FIFO）
-- `dispatchLow`: 低優先度キュー（キー単位でcoalescing）
-- キュー飽和時は通知をドロップし、監視ループを止めない
+- 高優先度: `dispatchHigh`（FIFO）
+- 低優先度: `dispatchLow`（キー単位 coalescing）
+- 飽和時は通知をドロップし、監視ループのブロックを防止
 
 ### small diff フロー
 
-- 条件: `DiffPixels` が `1..10`（`smallDiffPixelLimit=10`）
-- Embedではなく単一テキスト通知を `edit` で更新
-- 差分座標を `- (tileX-tileY-pixelX-pixelY:URL)` 形式で列挙
-- URLは `BuildWplaceHighDetailPixelURL`（`/me` と同系統の高倍率リンク）
-- 省電力モードの入退出時にメッセージ追跡IDをリセットし、古い通知の誤編集を防止
+- 条件: `DiffPixels` が `1..10`
+- Embed ではなくテキストを 1件編集し続ける
+- 形式: `- (tileX-tileY-pixelX-pixelY:URL)`
+- URL は `/me` 系と同じ高倍率ロジックを利用
+- 省電力モード入退出時に編集先メッセージ追跡をリセット
 
-### 省電力解除時の断定補助
+### 追加監視/進捗監視のエラーポリシー
 
-- `PowerSaveMode=true -> false` の遷移時に、解除直後の `DiffPixels` を推定対象として arm
-- 2px 以上の急増時は、最初に検出された painter を対象ピクセルの主担当として帰属
-- 対象ピクセルは短時間TTL内で消費し、通常集計への二重加算を回避
+- 取得失敗、テンプレ解決失敗、比較失敗は Discord 送信しない
+- エラーはローカルログのみへ出力
+- 回線不良時でも監視ループが通知待ちで停止しない
 
-### フォールバック監視
+## Activity 層（断定推定アルゴリズム）
 
-主要ファイル: `internal/notifications/notifier_standalone_fallback.go`
+主要ファイル: `internal/activity/tracker.go`
 
-- WS断が1分継続時に standalone 監視へ切替
-- ターゲット解決順:
-  - `MONITOR_STANDALONE_TARGET_ID`（watch_targets参照）
-  - `MONITOR_STANDALONE_ORIGIN` / `MONITOR_STANDALONE_TEMPLATE`
-  - 既定値
-- standalone失敗時は指数バックオフ
+### 前提
 
-## 追加監視 / 進捗監視
+`Tracker.UpdateDiffImage` は前回 diff (`oldDiff`) と最新 diff (`newDiff`) を比較し、
 
-主要ファイル:
-- `internal/notifications/notifier_watch_targets.go`
-- `internal/notifications/notifier_progress_targets.go`
-- `internal/notifications/target_common.go`
+- `added`  : 新たに vandal diff になった px 数
+- `removed`: 修復されて diff から消えた px 数
 
-### 仕様
+を計算します。
 
-- `watch_targets.json` / `progress_targets.json` をTTL付きで再読込
-- テンプレート画像は `template_img` から読み込み、更新時刻でキャッシュ
-- ターゲット取得は並列数上限付きで実行
+### 一般化された断定条件
 
-### エラー通知方針
+- vandal 推定: `added >= 2 && removed == 0`
+- restore 推定: `added == 0 && removed >= 2`
+- 非推定: `added > 0 && removed > 0`（同時増減）
 
-- 回線不良時のノイズ抑制のため、追加監視/進捗監視のエラーは Discord 通知しない
-- エラーはローカルログへ出力（`suppressed error notification`）
+### 推定時の共通挙動
 
-## 画像取得/合成層
+- API呼び出しは 1プローブのみキュー
+- 最初に検出したユーザーを `ClaimedPainter` として確定
+- 対象px全体を一括クレジット
+- 逆方向変化が混ざった時点で推定解除
+- TTL 超過時は自動解除
+
+### vandal 推定の内部状態
+
+- `powerSaveInference` が状態を保持
+- `Baseline` は推定開始時点の diff スナップショット
+- クレジット対象は `currentDiff - Baseline`
+
+### restore 推定の内部状態
+
+- `restoreInference` が状態を保持
+- `Baseline` は推定開始時点の diff スナップショット
+- クレジット対象は `Baseline - currentDiff`
+
+### 目的
+
+- 急増/急減局面で API 負荷を削減（レート制限耐性）
+- 監視遅延や回線不良時の burst でも集計破綻を抑止
+
+## タイル取得 / 画像合成層
 
 主要ファイル: `internal/wplace/tiles.go`
 
 ### 仕様
 
-- タイルHTTP取得は接続プールを持つ専用 `http.Client`
-- タイルキャッシュ（TTL 2分）
-- グリッド取得はワーカープール方式で実行
-- `CombineTilesCroppedImage` で必要範囲のみ合成
+- HTTP クライアントは接続プール付き
+- タイルキャッシュ TTL は2分
+- グリッド取得は固定ワーカープール
+- `CombineTilesCroppedImage` で必要範囲を切り出し合成
 
-### 最適化
-
-- 以前の「タイルごとにgoroutine生成」から固定ワーカー数へ変更
-- キャッシュロックを `RWMutex` 化し read-heavy パスを軽量化
-
-## 時刻/日次処理
-
-- グラフ時刻軸: JST
-- タイムラプス表示時刻: JST
-- 日次ランキング送信タイミング: JST日付境界
-- 日次サマリ集計キー: JST
+## グラフ / タイムラプス
 
 主要ファイル:
-- `internal/commands/graph.go`
-- `internal/commands/timelapse.go`
+
 - `internal/embeds/graphs.go`
-- `internal/notifications/notifier_daily_ranking.go`
+- `internal/commands/graph.go`
+- `internal/embeds/timelapse.go`
+- `internal/commands/timelapse.go`
+
+### 時刻基準
+
+- グラフの時刻軸: JST
+- タイムラプス表示時刻: JST
+- 日次集計キー: JST
+
+### タイムラプス仕様
+
+- 終端フレームを1秒保持し、最終状態を視認しやすくする
 
 ## マルチギルド配信
 
-日次ランキングの添付画像はギルドごとに個別送信されます。  
-同一バッファの使い回しで「最初の1サーバーのみ添付される」問題を回避するため、送信ごとに `Reader` を作り直す実装です。
+主要ファイル: `internal/notifications/notifier_daily_ranking.go`
 
-## データ保存
+- 日次サマリ/ランキング添付画像はギルドごとに個別送信
+- 同一バッファ使い回しによる「最初の1ギルドのみ添付」問題を回避
 
-主な永続ファイル:
+## 永続データ
 
-- `data/settings.json`
-- `data/user_activity.json`
-- `data/vandalized_pixels.json`
-- `data/vandal_daily.json`
-- `data/watch_targets.json`
-- `data/progress_targets.json`
-- `data/template_img/*`
+`data/` 配下に保存:
 
-## テスト
+- `settings.json`
+- `user_activity.json`
+- `vandalized_pixels.json`
+- `vandal_daily.json`
+- `achievements.json`
+- `watch_targets.json`
+- `progress_targets.json`
+- `template_img/*`
 
-主要テスト対象:
+## 主要テスト
 
-- 座標/URL変換: `internal/utils/*_test.go`
-- small diff 座標抽出: `internal/notifications/notifier_small_diff_coords_test.go`
-- 日次ランキング/画像添付: `internal/notifications/notifier_daily_ranking_test.go`
-- グラフJST表示: `internal/embeds/graphs_test.go`
-- monitorテキストpayload解析: `internal/monitor/monitor_text_payload_test.go`
+- `internal/activity/tracker_test.go`
+  - 断定ライフサイクル
+  - 1プローブキュー
+  - 純増/純減での自動arm
+  - 増減混在時のリセット
+- `internal/notifications/notifier_small_diff_coords_test.go`
+- `internal/notifications/notifier_daily_ranking_test.go`
+- `internal/embeds/graphs_test.go`
+- `internal/monitor/monitor_text_payload_test.go`
 
 ---
 
