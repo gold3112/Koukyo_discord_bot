@@ -81,11 +81,20 @@ type DailyPixelCounts struct {
 const (
 	newUserNotifyThreshold      = 5
 	newUserNotifyWindow         = 5 * time.Minute
+	powerSaveInferenceMinPixels = 2
+	powerSaveInferenceTTL       = 2 * time.Minute
 	defaultStateFlushInterval   = 10 * time.Second
 	defaultRecentEventsInterval = 1 * time.Minute
 	defaultActivityGCInterval   = 24 * time.Hour
 	activityRetentionDays       = 30
 )
+
+type powerSaveInferenceState struct {
+	Active          bool
+	ClaimedPainter  string
+	RemainingPixels int
+	ExpiresAt       time.Time
+}
 
 type Tracker struct {
 	cfg          Config
@@ -114,6 +123,7 @@ type Tracker struct {
 	flushInterval      time.Duration
 	recentGCInterval   time.Duration
 	activityGCInterval time.Duration
+	powerSaveInference powerSaveInferenceState
 }
 
 type NewUserCallback func(kind string, user UserActivity)
@@ -163,6 +173,19 @@ func (t *Tracker) SetNewUserCallback(cb NewUserCallback) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.newUserCB = cb
+}
+
+// ArmPowerSaveResumeInference arms the "first painter attribution" heuristic.
+// When power-save exits with a sudden multi-pixel diff, the first detected painter
+// is treated as the likely actor for those pixels.
+func (t *Tracker) ArmPowerSaveResumeInference(diffPixels int) {
+	now := time.Now().UTC()
+	t.mu.Lock()
+	armed := armPowerSaveInference(&t.powerSaveInference, diffPixels, now)
+	t.mu.Unlock()
+	if armed {
+		log.Printf("activity inference armed: diff_pixels=%d ttl=%s", diffPixels, powerSaveInferenceTTL)
+	}
 }
 
 func (t *Tracker) Start() {
@@ -367,33 +390,44 @@ func (t *Tracker) processPixel(px Pixel) {
 	dateKey := now.In(jst).Format("2006-01-02")
 
 	t.mu.Lock()
-	painterID := strconv.Itoa(painter.ID)
-	entry := t.activity[painterID]
+	detectedPainterID := strconv.Itoa(painter.ID)
+	effectivePainterID := detectedPainterID
+	inferenceActive := false
+	inferenceCredit := 0
+	if isDiff {
+		inferenceActive, effectivePainterID, inferenceCredit = beginPowerSaveInference(&t.powerSaveInference, detectedPainterID, now)
+	}
+
+	entry := t.activity[effectivePainterID]
 	if entry == nil {
 		entry = &UserActivity{
-			ID:           painterID,
-			Name:         painter.Name,
-			AllianceName: painter.AllianceName,
+			ID:   effectivePainterID,
+			Name: fmt.Sprintf("ID:%s", effectivePainterID),
 		}
 		ensureActivityMaps(entry)
-		t.activity[painterID] = entry
+		t.activity[effectivePainterID] = entry
 	} else {
 		ensureActivityMaps(entry)
+	}
+
+	// Keep profile fields trusted: only overwrite when we are updating the
+	// actually detected painter, not an inferred/aliased one.
+	if effectivePainterID == detectedPainterID {
 		if painter.Name != "" {
 			entry.Name = painter.Name
 		}
 		if painter.AllianceName != "" {
 			entry.AllianceName = painter.AllianceName
 		}
-	}
-	if painter.Discord != "" {
-		entry.Discord = painter.Discord
-	}
-	if painter.DiscordID != "" {
-		entry.DiscordID = painter.DiscordID
-	}
-	if painter.Picture != "" {
-		entry.Picture = painter.Picture
+		if painter.Discord != "" {
+			entry.Discord = painter.Discord
+		}
+		if painter.DiscordID != "" {
+			entry.DiscordID = painter.DiscordID
+		}
+		if painter.Picture != "" {
+			entry.Picture = painter.Picture
+		}
 	}
 
 	entry.LastSeen = now.Format(time.RFC3339Nano)
@@ -402,16 +436,37 @@ func (t *Tracker) processPixel(px Pixel) {
 	notifyKind := ""
 	shouldNotify := false
 	if isDiff {
-		entry.VandalCount++
-		entry.DailyVandalCounts[dateKey]++
-		entry.ActivityScore--
-		entry.DailyActivityScores[dateKey]--
-		t.vandalState.PixelToPainter[key] = painterID
-		windowCount := recordRecentEvent(t.recentVandalEvents, painterID, now, newUserNotifyWindow)
-		if !entry.VandalNotified && windowCount >= newUserNotifyThreshold {
-			notifyKind = "vandal"
-			shouldNotify = true
-			entry.VandalNotified = true
+		if inferenceActive {
+			if inferenceCredit > 0 {
+				entry.VandalCount += inferenceCredit
+				entry.DailyVandalCounts[dateKey] += inferenceCredit
+				entry.ActivityScore -= inferenceCredit
+				entry.DailyActivityScores[dateKey] -= inferenceCredit
+				windowCount := recordRecentEvents(t.recentVandalEvents, effectivePainterID, now, newUserNotifyWindow, inferenceCredit)
+				if !entry.VandalNotified && windowCount >= newUserNotifyThreshold {
+					notifyKind = "vandal"
+					shouldNotify = true
+					entry.VandalNotified = true
+				}
+				log.Printf("activity inference claimed painter=%s pixels=%d", effectivePainterID, inferenceCredit)
+			}
+			if effectivePainterID != detectedPainterID {
+				activityDebugf("activity inference aliases %s -> %s", detectedPainterID, effectivePainterID)
+			}
+			t.vandalState.PixelToPainter[key] = effectivePainterID
+			consumePowerSaveInference(&t.powerSaveInference)
+		} else {
+			entry.VandalCount++
+			entry.DailyVandalCounts[dateKey]++
+			entry.ActivityScore--
+			entry.DailyActivityScores[dateKey]--
+			t.vandalState.PixelToPainter[key] = effectivePainterID
+			windowCount := recordRecentEvent(t.recentVandalEvents, effectivePainterID, now, newUserNotifyWindow)
+			if !entry.VandalNotified && windowCount >= newUserNotifyThreshold {
+				notifyKind = "vandal"
+				shouldNotify = true
+				entry.VandalNotified = true
+			}
 		}
 	} else {
 		entry.RestoredCount++
@@ -419,7 +474,7 @@ func (t *Tracker) processPixel(px Pixel) {
 		entry.ActivityScore++
 		entry.DailyActivityScores[dateKey]++
 		delete(t.vandalState.PixelToPainter, key)
-		windowCount := recordRecentEvent(t.recentFixEvents, painterID, now, newUserNotifyWindow)
+		windowCount := recordRecentEvent(t.recentFixEvents, effectivePainterID, now, newUserNotifyWindow)
 		if !entry.FixNotified && windowCount >= newUserNotifyThreshold {
 			notifyKind = "fix"
 			shouldNotify = true
@@ -838,6 +893,90 @@ func recordRecentEvent(
 	events = events[:write]
 	store[userID] = events
 	return len(events)
+}
+
+func recordRecentEvents(
+	store map[string][]time.Time,
+	userID string,
+	now time.Time,
+	window time.Duration,
+	count int,
+) int {
+	if count <= 0 {
+		events := store[userID]
+		cutoff := now.Add(-window)
+		write := 0
+		for _, ts := range events {
+			if ts.Before(cutoff) {
+				continue
+			}
+			events[write] = ts
+			write++
+		}
+		events = events[:write]
+		store[userID] = events
+		return len(events)
+	}
+	// Notification threshold is small; cap synthetic events to keep memory bounded.
+	capped := count
+	if capped > newUserNotifyThreshold {
+		capped = newUserNotifyThreshold
+	}
+	windowCount := 0
+	for i := 0; i < capped; i++ {
+		windowCount = recordRecentEvent(store, userID, now, window)
+	}
+	return windowCount
+}
+
+func armPowerSaveInference(state *powerSaveInferenceState, diffPixels int, now time.Time) bool {
+	if state == nil {
+		return false
+	}
+	if diffPixels < powerSaveInferenceMinPixels {
+		resetPowerSaveInference(state)
+		return false
+	}
+	state.Active = true
+	state.ClaimedPainter = ""
+	state.RemainingPixels = diffPixels
+	state.ExpiresAt = now.Add(powerSaveInferenceTTL)
+	return true
+}
+
+func beginPowerSaveInference(state *powerSaveInferenceState, detectedPainterID string, now time.Time) (active bool, effectivePainterID string, creditPixels int) {
+	if state == nil || !state.Active {
+		return false, "", 0
+	}
+	if state.RemainingPixels <= 0 || now.After(state.ExpiresAt) {
+		resetPowerSaveInference(state)
+		return false, "", 0
+	}
+	if state.ClaimedPainter == "" {
+		state.ClaimedPainter = detectedPainterID
+		creditPixels = state.RemainingPixels
+	}
+	return true, state.ClaimedPainter, creditPixels
+}
+
+func consumePowerSaveInference(state *powerSaveInferenceState) {
+	if state == nil || !state.Active {
+		return
+	}
+	state.RemainingPixels--
+	if state.RemainingPixels <= 0 {
+		resetPowerSaveInference(state)
+	}
+}
+
+func resetPowerSaveInference(state *powerSaveInferenceState) {
+	if state == nil {
+		return
+	}
+	state.Active = false
+	state.ClaimedPainter = ""
+	state.RemainingPixels = 0
+	state.ExpiresAt = time.Time{}
 }
 
 func pruneRecentEventStore(store map[string][]time.Time, cutoff time.Time) {

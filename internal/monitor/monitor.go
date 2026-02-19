@@ -508,7 +508,9 @@ func (m *Monitor) pollFallbackLoop() {
 				continue
 			}
 
+			wasPowerSave := m.State.IsPowerSaveMode()
 			m.State.UpdateData(data)
+			m.armPowerSaveInferenceOnResume(wasPowerSave, data)
 			m.pollMu.Lock()
 			m.pollAttempts = 0
 			m.pollNextAttemptAt = time.Now().Add(m.pollBaseInterval)
@@ -589,13 +591,28 @@ func (m *Monitor) handleTextMessage(message []byte) error {
 
 	if payload.hasMonitoringData() {
 		data := payload.toMonitorData()
+		wasPowerSave := m.State.IsPowerSaveMode()
 		m.State.UpdateData(data)
+		m.armPowerSaveInferenceOnResume(wasPowerSave, data)
 		monitorDebugf("Updated: Diff=%.2f%%, Weighted=%.2f%%",
 			data.DiffPercentage,
 			getWeightedValue(data.WeightedDiffPercentage))
 	}
 
 	return nil
+}
+
+func (m *Monitor) armPowerSaveInferenceOnResume(wasPowerSave bool, data *MonitorData) {
+	if data == nil || !wasPowerSave || m.State.IsPowerSaveMode() {
+		return
+	}
+	m.mu.RLock()
+	tracker := m.tracker
+	m.mu.RUnlock()
+	if tracker == nil {
+		return
+	}
+	tracker.ArmPowerSaveResumeInference(data.DiffPixels)
 }
 
 // handleBinaryMessage バイナリメッセージ（画像）を処理

@@ -78,6 +78,12 @@ cmd/bot/main.go
 - URLは `BuildWplaceHighDetailPixelURL`（`/me` と同系統の高倍率リンク）
 - 省電力モードの入退出時にメッセージ追跡IDをリセットし、古い通知の誤編集を防止
 
+### 省電力解除時の断定補助
+
+- `PowerSaveMode=true -> false` の遷移時に、解除直後の `DiffPixels` を推定対象として arm
+- 2px 以上の急増時は、最初に検出された painter を対象ピクセルの主担当として帰属
+- 対象ピクセルは短時間TTL内で消費し、通常集計への二重加算を回避
+
 ### フォールバック監視
 
 主要ファイル: `internal/notifications/notifier_standalone_fallback.go`
