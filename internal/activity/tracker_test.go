@@ -1,6 +1,10 @@
 package activity
 
 import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"testing"
 	"time"
 )
@@ -97,4 +101,97 @@ func TestRecordRecentEventsCapped(t *testing.T) {
 	if got != newUserNotifyThreshold {
 		t.Fatalf("expected capped recent events count %d, got %d", newUserNotifyThreshold, got)
 	}
+}
+
+func TestClaimDeferredPixels(t *testing.T) {
+	t.Parallel()
+
+	state := powerSaveInferenceState{Active: true}
+	deferPowerSaveInferencePixel(&state, Pixel{AbsX: 10, AbsY: 20})
+	deferPowerSaveInferencePixel(&state, Pixel{AbsX: 11, AbsY: 21})
+
+	vs := &VandalState{PixelToPainter: map[string]string{}}
+	claimed := claimDeferredPixels(&state, "1001", vs)
+	if claimed != 2 {
+		t.Fatalf("expected claimed deferred pixels=2, got %d", claimed)
+	}
+	if len(state.DeferredPixels) != 0 {
+		t.Fatalf("deferred pixels should be cleared after claim")
+	}
+	if got := vs.PixelToPainter[pixelKey(10, 20)]; got != "1001" {
+		t.Fatalf("unexpected painter for first deferred pixel: %q", got)
+	}
+	if got := vs.PixelToPainter[pixelKey(11, 21)]; got != "1001" {
+		t.Fatalf("unexpected painter for second deferred pixel: %q", got)
+	}
+}
+
+func TestUpdateDiffImageInferenceQueuesSingleProbe(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(Config{
+		TopLeftTileX:  0,
+		TopLeftTileY:  0,
+		TopLeftPixelX: 0,
+		TopLeftPixelY: 0,
+		Width:         2,
+		Height:        2,
+	}, nil, "")
+
+	tracker.ArmPowerSaveResumeInference(3)
+	first := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+		{1, 0}: true,
+		{0, 1}: true,
+	})
+	if err := tracker.UpdateDiffImage(first); err != nil {
+		t.Fatalf("UpdateDiffImage(first) returned error: %v", err)
+	}
+
+	if got := len(tracker.queue); got != 1 {
+		t.Fatalf("expected queue length 1 (probe only), got %d", got)
+	}
+
+	tracker.mu.Lock()
+	if !tracker.powerSaveInference.ProbeQueued {
+		t.Fatalf("expected ProbeQueued=true after first update")
+	}
+	if got := len(tracker.powerSaveInference.DeferredPixels); got != 2 {
+		t.Fatalf("expected 2 deferred pixels, got %d", got)
+	}
+	tracker.mu.Unlock()
+
+	second := mustEncodeDiffPNG(t, map[[2]int]bool{
+		{0, 0}: true,
+		{1, 0}: true,
+		{0, 1}: true,
+		{1, 1}: true, // +1 added while probe still pending
+	})
+	if err := tracker.UpdateDiffImage(second); err != nil {
+		t.Fatalf("UpdateDiffImage(second) returned error: %v", err)
+	}
+
+	if got := len(tracker.queue); got != 1 {
+		t.Fatalf("expected still 1 queued probe after second update, got %d", got)
+	}
+	tracker.mu.Lock()
+	if got := len(tracker.powerSaveInference.DeferredPixels); got != 3 {
+		t.Fatalf("expected deferred pixels to grow to 3, got %d", got)
+	}
+	tracker.mu.Unlock()
+}
+
+func mustEncodeDiffPNG(t *testing.T, pixels map[[2]int]bool) []byte {
+	t.Helper()
+
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	for pos := range pixels {
+		img.Set(pos[0], pos[1], color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("failed to encode diff png: %v", err)
+	}
+	return buf.Bytes()
 }

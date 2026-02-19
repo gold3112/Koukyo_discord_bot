@@ -91,9 +91,11 @@ const (
 
 type powerSaveInferenceState struct {
 	Active          bool
+	ProbeQueued     bool
 	ClaimedPainter  string
 	RemainingPixels int
 	ExpiresAt       time.Time
+	DeferredPixels  map[string]Pixel
 }
 
 type Tracker struct {
@@ -319,24 +321,60 @@ func (t *Tracker) UpdateDiffImage(pngBytes []byte) error {
 	t.dailyCounts.Fix[dateKey] += removed
 	t.dirtyVandalState = true
 	t.dirtyDailyCounts = true
-	t.mu.Unlock()
-
-	changes := make([]Pixel, 0)
+	addedPixels := make([]Pixel, 0, added)
 	for key, px := range newDiff {
 		if _, ok := oldDiff[key]; !ok {
-			changes = append(changes, px)
+			addedPixels = append(addedPixels, px)
 		}
 	}
+	removedPixels := make([]Pixel, 0, removed)
 	for key, px := range oldDiff {
 		if _, ok := newDiff[key]; !ok {
-			changes = append(changes, px)
+			removedPixels = append(removedPixels, px)
 		}
 	}
-	if len(changes) == 0 {
+
+	queueAdded := addedPixels
+	now := time.Now().UTC()
+	if t.powerSaveInference.Active && now.After(t.powerSaveInference.ExpiresAt) {
+		resetPowerSaveInference(&t.powerSaveInference)
+	}
+	if t.powerSaveInference.Active && len(addedPixels) > 0 {
+		if t.powerSaveInference.ClaimedPainter == "" {
+			if !t.powerSaveInference.ProbeQueued {
+				// Keep exactly one pixel for API detection; defer the rest.
+				first := addedPixels[0]
+				queueAdded = []Pixel{first}
+				t.powerSaveInference.ProbeQueued = true
+				for _, px := range addedPixels[1:] {
+					deferPowerSaveInferencePixel(&t.powerSaveInference, px)
+				}
+			} else {
+				// Probe already queued; defer all new added pixels without extra API calls.
+				queueAdded = nil
+				for _, px := range addedPixels {
+					deferPowerSaveInferencePixel(&t.powerSaveInference, px)
+				}
+			}
+		} else {
+			// Painter already determined: no further queue/API for added pixels.
+			claimDeferredPixels(&t.powerSaveInference, t.powerSaveInference.ClaimedPainter, &t.vandalState)
+			for _, px := range addedPixels {
+				t.vandalState.PixelToPainter[pixelKey(px.AbsX, px.AbsY)] = t.powerSaveInference.ClaimedPainter
+			}
+			queueAdded = nil
+		}
+	}
+	t.mu.Unlock()
+
+	if len(queueAdded) == 0 && len(removedPixels) == 0 {
 		activityDebugf("activity diff changes: none")
 	}
 
-	for _, px := range changes {
+	for _, px := range queueAdded {
+		t.enqueuePixel(px)
+	}
+	for _, px := range removedPixels {
 		t.enqueuePixel(px)
 	}
 
@@ -437,6 +475,7 @@ func (t *Tracker) processPixel(px Pixel) {
 	shouldNotify := false
 	if isDiff {
 		if inferenceActive {
+			t.vandalState.PixelToPainter[key] = effectivePainterID
 			if inferenceCredit > 0 {
 				entry.VandalCount += inferenceCredit
 				entry.DailyVandalCounts[dateKey] += inferenceCredit
@@ -448,13 +487,19 @@ func (t *Tracker) processPixel(px Pixel) {
 					shouldNotify = true
 					entry.VandalNotified = true
 				}
+				deferredCount := claimDeferredPixels(&t.powerSaveInference, effectivePainterID, &t.vandalState)
+				if deferredCount > 0 {
+					activityDebugf("activity inference deferred pixels assigned=%d", deferredCount)
+				}
 				log.Printf("activity inference claimed painter=%s pixels=%d", effectivePainterID, inferenceCredit)
+				// Inference is consumed in a single claim (1 API call).
+				resetPowerSaveInference(&t.powerSaveInference)
+			} else {
+				consumePowerSaveInference(&t.powerSaveInference)
 			}
 			if effectivePainterID != detectedPainterID {
 				activityDebugf("activity inference aliases %s -> %s", detectedPainterID, effectivePainterID)
 			}
-			t.vandalState.PixelToPainter[key] = effectivePainterID
-			consumePowerSaveInference(&t.powerSaveInference)
 		} else {
 			entry.VandalCount++
 			entry.DailyVandalCounts[dateKey]++
@@ -929,6 +974,30 @@ func recordRecentEvents(
 	return windowCount
 }
 
+func deferPowerSaveInferencePixel(state *powerSaveInferenceState, px Pixel) {
+	if state == nil || !state.Active {
+		return
+	}
+	if state.DeferredPixels == nil {
+		state.DeferredPixels = make(map[string]Pixel)
+	}
+	key := pixelKey(px.AbsX, px.AbsY)
+	state.DeferredPixels[key] = px
+}
+
+func claimDeferredPixels(state *powerSaveInferenceState, painterID string, vandalState *VandalState) int {
+	if state == nil || vandalState == nil || painterID == "" || len(state.DeferredPixels) == 0 {
+		return 0
+	}
+	count := 0
+	for key := range state.DeferredPixels {
+		vandalState.PixelToPainter[key] = painterID
+		count++
+	}
+	state.DeferredPixels = nil
+	return count
+}
+
 func armPowerSaveInference(state *powerSaveInferenceState, diffPixels int, now time.Time) bool {
 	if state == nil {
 		return false
@@ -938,9 +1007,11 @@ func armPowerSaveInference(state *powerSaveInferenceState, diffPixels int, now t
 		return false
 	}
 	state.Active = true
+	state.ProbeQueued = false
 	state.ClaimedPainter = ""
 	state.RemainingPixels = diffPixels
 	state.ExpiresAt = now.Add(powerSaveInferenceTTL)
+	state.DeferredPixels = nil
 	return true
 }
 
@@ -974,9 +1045,11 @@ func resetPowerSaveInference(state *powerSaveInferenceState) {
 		return
 	}
 	state.Active = false
+	state.ProbeQueued = false
 	state.ClaimedPainter = ""
 	state.RemainingPixels = 0
 	state.ExpiresAt = time.Time{}
+	state.DeferredPixels = nil
 }
 
 func pruneRecentEventStore(store map[string][]time.Time, cutoff time.Time) {
