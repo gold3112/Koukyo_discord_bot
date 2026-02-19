@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -75,7 +76,7 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 
 	titleDate := reportTime.In(jst).Format("2006-01-02 (JST)")
 	peakLiveImage, peakDiffImage, _, _, peakOK := n.monitor.State.GetDailyPeakImages(dateKey)
-	peakFiles, peakAttachmentName := buildPeakImageFile(peakLiveImage, peakDiffImage, peakOK)
+	peakAttachmentData, peakAttachmentName := buildPeakImageAttachmentData(peakLiveImage, peakDiffImage, peakOK)
 	embed := buildDailyRankingEmbed(titleDate, summaryText, vandalText, restoreText, activityText, "")
 
 	for _, guild := range n.session.State.Guilds {
@@ -83,6 +84,7 @@ func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
 		if !gs.AutoNotifyEnabled || gs.NotificationChannel == nil {
 			continue
 		}
+		peakFiles := buildPeakFilesForSend(peakAttachmentData, peakAttachmentName)
 		msg, err := n.session.ChannelMessageSendComplex(*gs.NotificationChannel, &discordgo.MessageSend{
 			Embeds: []*discordgo.MessageEmbed{embed},
 			Files:  peakFiles,
@@ -172,7 +174,7 @@ func buildDailyRankingEmbed(titleDate, summaryText, vandalText, restoreText, act
 	}
 }
 
-func buildPeakImageFile(liveImg, diffImg []byte, ok bool) ([]*discordgo.File, string) {
+func buildPeakImageAttachmentData(liveImg, diffImg []byte, ok bool) ([]byte, string) {
 	if !ok || len(diffImg) == 0 {
 		return nil, ""
 	}
@@ -180,22 +182,31 @@ func buildPeakImageFile(liveImg, diffImg []byte, ok bool) ([]*discordgo.File, st
 	if len(liveImg) > 0 {
 		combined, err := embeds.CombineImages(liveImg, diffImg)
 		if err == nil {
-			name := "daily_peak_combined.png"
-			return []*discordgo.File{{
-				Name:        name,
-				ContentType: "image/png",
-				Reader:      combined,
-			}}, name
+			data, readErr := io.ReadAll(combined)
+			if readErr != nil {
+				log.Printf("Failed to read combined daily peak image: %v", readErr)
+			} else {
+				name := "daily_peak_combined.png"
+				return data, name
+			}
+		} else {
+			log.Printf("Failed to combine daily peak images: %v", err)
 		}
-		log.Printf("Failed to combine daily peak images: %v", err)
 	}
 
 	name := "daily_peak_diff.png"
+	return append([]byte(nil), diffImg...), name
+}
+
+func buildPeakFilesForSend(attachmentData []byte, attachmentName string) []*discordgo.File {
+	if len(attachmentData) == 0 || attachmentName == "" {
+		return nil
+	}
 	return []*discordgo.File{{
-		Name:        name,
+		Name:        attachmentName,
 		ContentType: "image/png",
-		Reader:      bytes.NewReader(diffImg),
-	}}, name
+		Reader:      bytes.NewReader(attachmentData),
+	}}
 }
 
 func buildRanking(entries map[string]*activity.UserActivity, dateKey string, vandal bool) []rankingEntry {

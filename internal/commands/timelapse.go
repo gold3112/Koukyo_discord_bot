@@ -9,6 +9,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+var timelapseJST = time.FixedZone("JST", 9*3600)
+
 // TimelapseCommand 閾値(>=30%→<=0.2%)の期間タイムラプス(GIF)を生成
 // ローカル保存せず、メモリ生成して送信
 type TimelapseCommand struct {
@@ -64,9 +66,9 @@ func (c *TimelapseCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Inter
 
 	embed := &discordgo.MessageEmbed{
 		Title:       "差分タイムラプス",
-		Description: fmt.Sprintf("フレーム数: %d / 開始: %s / 終了: %s", len(frames), frames[0].Timestamp.Format("15:04:05"), frames[len(frames)-1].Timestamp.Format("15:04:05")),
+		Description: fmt.Sprintf("フレーム数: %d / 開始: %s / 終了: %s (JST)", len(frames), frames[0].Timestamp.In(timelapseJST).Format("15:04:05"), frames[len(frames)-1].Timestamp.In(timelapseJST).Format("15:04:05")),
 		Color:       0x00AA88,
-		Timestamp:   time.Now().Format(time.RFC3339),
+		Timestamp:   time.Now().In(timelapseJST).Format(time.RFC3339),
 	}
 
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -111,9 +113,9 @@ func (c *TimelapseCommand) respondTimelapse(s *discordgo.Session, channelID stri
 	// Embed
 	embed := &discordgo.MessageEmbed{
 		Title:       "差分タイムラプス",
-		Description: fmt.Sprintf("フレーム数: %d / 開始: %s / 終了: %s", len(frames), frames[0].Timestamp.Format("15:04:05"), frames[len(frames)-1].Timestamp.Format("15:04:05")),
+		Description: fmt.Sprintf("フレーム数: %d / 開始: %s / 終了: %s (JST)", len(frames), frames[0].Timestamp.In(timelapseJST).Format("15:04:05"), frames[len(frames)-1].Timestamp.In(timelapseJST).Format("15:04:05")),
 		Color:       0x00AA88,
-		Timestamp:   time.Now().Format(time.RFC3339),
+		Timestamp:   time.Now().In(timelapseJST).Format(time.RFC3339),
 	}
 
 	_, err = s.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{

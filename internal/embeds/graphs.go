@@ -15,6 +15,8 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
+var graphJST = time.FixedZone("JST", 9*3600)
+
 // BuildDiffGraphPNG 差分履歴から簡易折れ線グラフPNGを生成
 // history: 時系列の差分率, titleは埋め込み側で使う
 
@@ -103,11 +105,11 @@ func BuildDiffGraphPNG(history []monitor.DiffRecord) (*bytes.Buffer, error) {
 	for i := 0; i <= nXTicks; i++ {
 		t := tMin.Add(time.Duration(float64(tMax.Sub(tMin)) * float64(i) / float64(nXTicks)))
 		x := plotRect.Min.X + int(float64(plotRect.Dx())*float64(i)/float64(nXTicks))
-		drawText(img, x-18, plotRect.Max.Y+12, t.Format("15:04"), tickColor)
+		drawText(img, x-18, plotRect.Max.Y+12, formatGraphTickTimeJST(t), tickColor)
 	}
 
 	// 軸ラベル
-	drawText(img, plotRect.Min.X+(plotRect.Dx()/2)-18, plotRect.Max.Y+34, "Time", color.RGBA{40, 40, 80, 255})
+	drawText(img, plotRect.Min.X+(plotRect.Dx()/2)-30, plotRect.Max.Y+34, "Time (JST)", color.RGBA{40, 40, 80, 255})
 	// 縦軸ラベル（ASCIIのみで可読性優先）
 	yLabel := "Diff %"
 	for i := 0; i < len(yLabel); i++ {
@@ -292,4 +294,8 @@ func drawText(img *image.RGBA, x, y int, s string, c color.RGBA) {
 		Dot:  fixed.P(x, y+13),
 	}
 	d.DrawString(s)
+}
+
+func formatGraphTickTimeJST(t time.Time) string {
+	return t.In(graphJST).Format("15:04")
 }

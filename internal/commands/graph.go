@@ -15,6 +15,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+var commandJST = time.FixedZone("JST", 9*3600)
+
 // GraphCommand 差分率のグラフ表示
 type GraphCommand struct {
 	mon     *monitor.Monitor
@@ -50,11 +52,12 @@ func (c *GraphCommand) executeDiff(metric string, duration time.Duration) (*disc
 	if weighted {
 		title = "加重差分率グラフ"
 	}
+	nowJST := time.Now().In(commandJST)
 	embed := &discordgo.MessageEmbed{
 		Title:       title,
-		Description: fmt.Sprintf("範囲: %s / データ点: %d", humanDuration(duration), len(history)),
+		Description: fmt.Sprintf("範囲: %s / データ点: %d / 時刻軸: JST", humanDuration(duration), len(history)),
 		Color:       0x63A4FF,
-		Timestamp:   time.Now().Format(time.RFC3339),
+		Timestamp:   nowJST.Format(time.RFC3339),
 		Image:       &discordgo.MessageEmbedImage{URL: "attachment://diff_graph.png"},
 	}
 
@@ -81,11 +84,12 @@ func (c *GraphCommand) executeVandal(duration time.Duration) (*discordgo.Message
 	if err != nil {
 		return nil, nil, fmt.Errorf("グラフ生成に失敗しました: %w", err)
 	}
+	nowJST := time.Now().In(commandJST)
 	embed := &discordgo.MessageEmbed{
 		Title:       "荒らし件数グラフ",
-		Description: fmt.Sprintf("範囲: 過去%d日 / データ点: %d", days, len(labels)),
+		Description: fmt.Sprintf("範囲: 過去%d日(JST) / データ点: %d", days, len(labels)),
 		Color:       0xE74C3C,
-		Timestamp:   time.Now().Format(time.RFC3339),
+		Timestamp:   nowJST.Format(time.RFC3339),
 		Image:       &discordgo.MessageEmbedImage{URL: "attachment://vandal_graph.png"},
 	}
 	return embed, pngBuf, nil
