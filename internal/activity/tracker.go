@@ -451,14 +451,25 @@ func (t *Tracker) processPixel(px Pixel) {
 	_, isDiff := t.currentDiff[key]
 	t.mu.Unlock()
 	activityDebugf("activity process pixel: %s (isDiff=%t)", key, isDiff)
+	defer func() {
+		t.mu.Lock()
+		delete(t.pending, key)
+		t.mu.Unlock()
+	}()
 
 	painter, err := t.fetchPainter(px)
 	if err != nil {
 		log.Printf("activity fetch error for %s: %v", key, err)
+		t.mu.Lock()
+		clearInferenceProbeOnFetchFailure(&t.powerSaveInference, &t.restoreInference)
+		t.mu.Unlock()
 		return
 	}
 	if painter == nil {
 		activityDebugf("activity fetch painter: nil for %s", key)
+		t.mu.Lock()
+		clearInferenceProbeOnFetchFailure(&t.powerSaveInference, &t.restoreInference)
+		t.mu.Unlock()
 		return
 	}
 
@@ -620,10 +631,6 @@ func (t *Tracker) processPixel(px Pixel) {
 	if shouldNotify && cb != nil {
 		cb(notifyKind, userCopy)
 	}
-
-	t.mu.Lock()
-	delete(t.pending, key)
-	t.mu.Unlock()
 }
 
 func (t *Tracker) fetchPainter(px Pixel) (*PaintedBy, error) {
@@ -1235,6 +1242,15 @@ func copyPixelMap(src map[string]Pixel) map[string]Pixel {
 		out[key] = px
 	}
 	return out
+}
+
+func clearInferenceProbeOnFetchFailure(vandalInference, restoreInference *powerSaveInferenceState) {
+	if vandalInference != nil && vandalInference.Active && vandalInference.ClaimedPainter == "" && vandalInference.ProbeQueued {
+		vandalInference.ProbeQueued = false
+	}
+	if restoreInference != nil && restoreInference.Active && restoreInference.ClaimedPainter == "" && restoreInference.ProbeQueued {
+		restoreInference.ProbeQueued = false
+	}
 }
 
 func pruneRecentEventStore(store map[string][]time.Time, cutoff time.Time) {

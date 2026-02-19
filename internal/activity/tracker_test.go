@@ -103,6 +103,38 @@ func TestRecordRecentEventsCapped(t *testing.T) {
 	}
 }
 
+func TestClearInferenceProbeOnFetchFailure(t *testing.T) {
+	t.Parallel()
+
+	vandal := powerSaveInferenceState{Active: true, ProbeQueued: true}
+	restore := powerSaveInferenceState{Active: true, ProbeQueued: true}
+
+	clearInferenceProbeOnFetchFailure(&vandal, &restore)
+
+	if vandal.ProbeQueued {
+		t.Fatalf("expected vandal probe flag to clear on fetch failure")
+	}
+	if restore.ProbeQueued {
+		t.Fatalf("expected restore probe flag to clear on fetch failure")
+	}
+}
+
+func TestClearInferenceProbeOnFetchFailureKeepsClaimedProbeState(t *testing.T) {
+	t.Parallel()
+
+	vandal := powerSaveInferenceState{Active: true, ProbeQueued: true, ClaimedPainter: "1001"}
+	restore := powerSaveInferenceState{Active: true, ProbeQueued: true, ClaimedPainter: "2002"}
+
+	clearInferenceProbeOnFetchFailure(&vandal, &restore)
+
+	if !vandal.ProbeQueued {
+		t.Fatalf("claimed vandal inference should not be altered")
+	}
+	if !restore.ProbeQueued {
+		t.Fatalf("claimed restore inference should not be altered")
+	}
+}
+
 func TestClaimCurrentDiffPixelsSkipsBaseline(t *testing.T) {
 	t.Parallel()
 
