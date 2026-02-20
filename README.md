@@ -79,7 +79,7 @@ go run ./cmd/bot
 - `me` - 自分の活動カード表示（Wplace 連携フローあり）
 - `achievements` - 自分の実績一覧を表示
 - `achievementchannel` - 実績通知チャンネルを設定（管理者向け）
-- `useractivity` - ユーザー活動の検索/詳細表示（スラッシュ専用）
+- `useractivity` - ユーザー活動の検索/詳細表示（スラッシュ専用、詳細で実績も表示）
 - `fixuser` - 修復ユーザー一覧（ランキング/最近、score/absolute）
 - `grfuser` - 荒らしユーザー一覧（ランキング/最近、score/absolute）
 

@@ -79,6 +79,23 @@ func (s *Store) GetByWplaceID(wplaceID string) *UserAchievements {
 	return s.Users[wplaceIdentityKey(wplaceID)]
 }
 
+func (s *Store) GetByIdentity(discordID, wplaceID string) *UserAchievements {
+	if s == nil || s.Users == nil {
+		return nil
+	}
+	if discordID != "" {
+		if user, ok := s.Users[discordID]; ok {
+			return user
+		}
+	}
+	if wplaceID != "" {
+		if user, ok := s.Users[wplaceIdentityKey(wplaceID)]; ok {
+			return user
+		}
+	}
+	return nil
+}
+
 func (s *Store) Award(discordID string, achievement Achievement) bool {
 	return s.AwardByIdentity(discordID, "", achievement)
 }

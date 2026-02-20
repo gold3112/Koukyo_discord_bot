@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"Koukyo_discord_bot/internal/achievements"
 	"Koukyo_discord_bot/internal/activity"
 	"Koukyo_discord_bot/internal/utils"
 	"bytes"
@@ -83,7 +84,7 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 		if err != nil {
 			return respondUserListError(s, i, err)
 		}
-		embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(entry, kind), listType, entry)
+		embed, file := buildUserActivityDetailEmbedFromEntry(c.dataDir, inferUserKind(entry, kind), listType, entry)
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -102,7 +103,7 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 			return respondUserListError(s, i, fmt.Errorf("該当ユーザーが見つかりません"))
 		}
 		if len(matches) == 1 {
-			embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(matches[0], kind), listType, matches[0])
+			embed, file := buildUserActivityDetailEmbedFromEntry(c.dataDir, inferUserKind(matches[0], kind), listType, matches[0])
 			return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -130,7 +131,7 @@ func (c *UserActivityCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.In
 			return respondUserListError(s, i, fmt.Errorf("該当ユーザーが見つかりません"))
 		}
 		if len(matches) == 1 {
-			embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(matches[0], kind), listType, matches[0])
+			embed, file := buildUserActivityDetailEmbedFromEntry(c.dataDir, inferUserKind(matches[0], kind), listType, matches[0])
 			return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -309,7 +310,7 @@ func HandleUserActivitySelect(s *discordgo.Session, i *discordgo.InteractionCrea
 		})
 		return
 	}
-	embed, file := buildUserActivityDetailEmbedFromEntry(inferUserKind(entry, userListKindGrf), userListTypeScore, entry)
+	embed, file := buildUserActivityDetailEmbedFromEntry(dataDir, inferUserKind(entry, userListKindGrf), userListTypeScore, entry)
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
@@ -356,7 +357,7 @@ func buildUserActivityDetailEmbed(dataDir, kind, listType string, page int) (*di
 		page = len(entries) - 1
 	}
 	entry := entries[page]
-	embed, file := buildUserActivityDetailEmbedFromEntry(kind, listType, entry)
+	embed, file := buildUserActivityDetailEmbedFromEntry(dataDir, kind, listType, entry)
 	embed.Footer = &discordgo.MessageEmbedFooter{
 		Text: fmt.Sprintf("ページ %d / %d", page+1, len(entries)),
 	}
@@ -382,7 +383,7 @@ func buildUserActivityDetailEmbed(dataDir, kind, listType string, page int) (*di
 	return embed, components, file, nil
 }
 
-func buildUserActivityDetailEmbedFromEntry(kind, listType string, entry userActivityEntry) (*discordgo.MessageEmbed, *discordgo.File) {
+func buildUserActivityDetailEmbedFromEntry(dataDir, kind, listType string, entry userActivityEntry) (*discordgo.MessageEmbed, *discordgo.File) {
 	name := utils.FormatUserDisplayName(entry.Name, entry.ID)
 	alliance := entry.Alliance
 	if alliance == "" {
@@ -422,6 +423,11 @@ func buildUserActivityDetailEmbedFromEntry(kind, listType string, entry userActi
 		},
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "実績",
+		Value:  buildUserAchievementSummary(dataDir, entry),
+		Inline: false,
+	})
 
 	file := buildUserActivityImageFile(entry)
 	if file != nil {
@@ -430,6 +436,53 @@ func buildUserActivityDetailEmbedFromEntry(kind, listType string, entry userActi
 		}
 	}
 	return embed, file
+}
+
+func buildUserAchievementSummary(dataDir string, entry userActivityEntry) string {
+	storePath := filepath.Join(dataDir, "achievements.json")
+	store, err := achievements.Load(storePath)
+	if err != nil {
+		return "取得に失敗しました。"
+	}
+
+	user := store.GetByIdentity(strings.TrimSpace(entry.DiscordID), strings.TrimSpace(entry.ID))
+	if user == nil || len(user.Achievements) == 0 {
+		return "まだ実績はありません。"
+	}
+
+	list := make([]achievements.Achievement, 0, len(user.Achievements))
+	list = append(list, user.Achievements...)
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].AwardedAt > list[j].AwardedAt
+	})
+
+	const (
+		maxLines = 8
+		maxChars = 900
+	)
+	lines := make([]string, 0, maxLines+1)
+	totalChars := 0
+
+	for i, a := range list {
+		if i >= maxLines {
+			lines = append(lines, fmt.Sprintf("...ほか%d件", len(list)-i))
+			break
+		}
+		line := "• " + a.Name
+		if a.AwardedAt != "" {
+			if t, parseErr := time.Parse(time.RFC3339, a.AwardedAt); parseErr == nil {
+				line += fmt.Sprintf(" (%s)", t.In(time.FixedZone("JST", 9*3600)).Format("2006-01-02"))
+			}
+		}
+		if totalChars+len(line) > maxChars {
+			lines = append(lines, fmt.Sprintf("...ほか%d件", len(list)-i))
+			break
+		}
+		lines = append(lines, line)
+		totalChars += len(line)
+	}
+
+	return fmt.Sprintf("%d件\n%s", len(list), strings.Join(lines, "\n"))
 }
 
 func loadUserActivityEntries(dataDir, kind, listType string) ([]userActivityEntry, error) {
