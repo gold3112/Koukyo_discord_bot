@@ -90,6 +90,8 @@ go run ./cmd/bot
 - `help` - コマンド一覧
 - `info` - Bot 情報
 - `ping` - 疎通確認
+- `proxy` - `[Golden Proxy]{display} (@username / userID)` で代理投稿（Webhook）
+- `proxydelete` - 代理投稿メッセージを削除（管理者向け）
 - `time` - 時刻表示/時差変換
 - `paint` - Paint 回復時間の計算（スラッシュ専用）
 
