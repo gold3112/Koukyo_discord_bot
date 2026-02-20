@@ -3,6 +3,7 @@ package achievements
 import (
 	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 )
@@ -62,20 +63,41 @@ func (s *Store) GetByDiscordID(discordID string) *UserAchievements {
 	if s == nil || s.Users == nil {
 		return nil
 	}
-	return s.Users[discordID]
+	if discordID == "" {
+		return nil
+	}
+	if user, ok := s.Users[discordID]; ok {
+		return user
+	}
+	return nil
+}
+
+func (s *Store) GetByWplaceID(wplaceID string) *UserAchievements {
+	if s == nil || s.Users == nil || wplaceID == "" {
+		return nil
+	}
+	return s.Users[wplaceIdentityKey(wplaceID)]
 }
 
 func (s *Store) Award(discordID string, achievement Achievement) bool {
-	if s == nil || discordID == "" || achievement.ID == "" {
+	return s.AwardByIdentity(discordID, "", achievement)
+}
+
+func (s *Store) AwardByIdentity(discordID, wplaceID string, achievement Achievement) bool {
+	key := resolveIdentityKey(discordID, wplaceID)
+	if s == nil || key == "" || achievement.ID == "" {
 		return false
 	}
 	if s.Users == nil {
 		s.Users = map[string]*UserAchievements{}
 	}
-	user := s.Users[discordID]
+	user := s.Users[key]
 	if user == nil {
-		user = &UserAchievements{DiscordID: discordID}
-		s.Users[discordID] = user
+		user = &UserAchievements{
+			DiscordID: discordID,
+			WplaceID:  wplaceID,
+		}
+		s.Users[key] = user
 	}
 	for _, a := range user.Achievements {
 		if a.ID == achievement.ID {
@@ -90,16 +112,23 @@ func (s *Store) Award(discordID string, achievement Achievement) bool {
 }
 
 func (s *Store) UpsertUserProfile(discordID, discordName, wplaceID, wplaceName string) {
-	if s == nil || discordID == "" {
+	key := resolveIdentityKey(discordID, wplaceID)
+	if s == nil || key == "" {
 		return
 	}
 	if s.Users == nil {
 		s.Users = map[string]*UserAchievements{}
 	}
-	user := s.Users[discordID]
+	user := s.Users[key]
 	if user == nil {
-		user = &UserAchievements{DiscordID: discordID}
-		s.Users[discordID] = user
+		user = &UserAchievements{
+			DiscordID: discordID,
+			WplaceID:  wplaceID,
+		}
+		s.Users[key] = user
+	}
+	if discordID != "" {
+		user.DiscordID = discordID
 	}
 	if discordName != "" {
 		user.DiscordName = discordName
@@ -110,4 +139,18 @@ func (s *Store) UpsertUserProfile(discordID, discordName, wplaceID, wplaceName s
 	if wplaceName != "" {
 		user.WplaceName = wplaceName
 	}
+}
+
+func resolveIdentityKey(discordID, wplaceID string) string {
+	if discordID != "" {
+		return discordID
+	}
+	if wplaceID != "" {
+		return wplaceIdentityKey(wplaceID)
+	}
+	return ""
+}
+
+func wplaceIdentityKey(wplaceID string) string {
+	return fmt.Sprintf("wplace:%s", wplaceID)
 }

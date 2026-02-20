@@ -17,6 +17,7 @@ const achievementEvalInterval = 1 * time.Minute
 type achievementNotice struct {
 	DiscordID       string
 	DiscordName     string
+	WplaceID        string
 	WplaceName      string
 	AchievementName string
 }
@@ -81,35 +82,47 @@ func (n *Notifier) evaluateAchievementsAndNotify() {
 		if entry == nil {
 			continue
 		}
-		discordID := strings.TrimSpace(entry.DiscordID)
-		if discordID == "" {
+		wplaceID = strings.TrimSpace(wplaceID)
+		if wplaceID == "" {
 			continue
 		}
+		discordID := strings.TrimSpace(entry.DiscordID)
 
-		store.UpsertUserProfile(discordID, strings.TrimSpace(entry.Discord), strings.TrimSpace(wplaceID), strings.TrimSpace(entry.Name))
+		store.UpsertUserProfile(discordID, strings.TrimSpace(entry.Discord), wplaceID, strings.TrimSpace(entry.Name))
 
 		snapshot := activityToSnapshot(wplaceID, entry)
 		newAwards := achievements.Evaluate(snapshot, ruleSet)
 		for _, award := range newAwards {
-			if !store.Award(discordID, award) {
+			if !store.AwardByIdentity(discordID, wplaceID, award) {
 				continue
 			}
 			awardedCount++
 			pendingNotices = append(pendingNotices, achievementNotice{
 				DiscordID:       discordID,
 				DiscordName:     strings.TrimSpace(entry.Discord),
+				WplaceID:        wplaceID,
 				WplaceName:      strings.TrimSpace(entry.Name),
 				AchievementName: award.Name,
 			})
 		}
 	}
 
-	if awardedCount == 0 {
-		return
+	initialSync := !n.achievementBaselineReady
+	if awardedCount > 0 {
+		if err := achievements.Save(storePath, store); err != nil {
+			log.Printf("achievement eval: failed to save store: %v", err)
+			return
+		}
 	}
 
-	if err := achievements.Save(storePath, store); err != nil {
-		log.Printf("achievement eval: failed to save store: %v", err)
+	if initialSync {
+		n.achievementBaselineReady = true
+		if awardedCount > 0 {
+			log.Printf("achievement eval: baseline sync completed, %d achievements saved (notifications suppressed)", awardedCount)
+		}
+		return
+	}
+	if awardedCount == 0 {
 		return
 	}
 
@@ -160,11 +173,17 @@ func parseActivityLastSeen(value string) time.Time {
 }
 
 func buildAchievementUserDisplay(notice achievementNotice) string {
-	if notice.DiscordName != "" {
-		return fmt.Sprintf("%s (Discord:%s)", notice.DiscordName, notice.DiscordID)
-	}
 	if notice.WplaceName != "" {
-		return fmt.Sprintf("%s (Discord:%s)", notice.WplaceName, notice.DiscordID)
+		return notice.WplaceName
 	}
-	return "Discord:" + notice.DiscordID
+	if notice.WplaceID != "" {
+		return "ID:" + notice.WplaceID
+	}
+	if notice.DiscordName != "" {
+		return notice.DiscordName
+	}
+	if notice.DiscordID != "" {
+		return fmt.Sprintf("Discord:%s", notice.DiscordID)
+	}
+	return "unknown"
 }

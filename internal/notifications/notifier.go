@@ -70,6 +70,7 @@ type Notifier struct {
 	smallDiffCacheLimit      int
 	smallDiffCacheLines      []string
 	achievementEvalMu        sync.Mutex
+	achievementBaselineReady bool
 }
 
 // NewNotifier 通知システムを作成

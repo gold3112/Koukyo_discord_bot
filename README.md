@@ -197,6 +197,8 @@ JSON 形式は共通です:
 実績の付与条件は `data/achievement_rules.json` で定義できます。  
 Botは定期的（1分ごと）に `user_activity.json` を評価し、条件達成時に `achievements.json` へ付与します。  
 `/achievementchannel` が設定されているギルドには獲得通知を送信します。
+起動直後の初回評価はベースライン同期として扱われ、通知は抑止されます（保存のみ）。
+実績通知の表示名はゲーム内ユーザー名を優先します。Discord未連携ユーザーでも実績付与対象です。
 
 ### ルール例
 
