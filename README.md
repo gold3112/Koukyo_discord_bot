@@ -77,6 +77,8 @@ go run ./cmd/bot
 
 ### ユーザー活動
 - `me` - 自分の活動カード表示（Wplace 連携フローあり）
+- `achievements` - 自分の実績一覧を表示
+- `achievementchannel` - 実績通知チャンネルを設定（管理者向け）
 - `useractivity` - ユーザー活動の検索/詳細表示（スラッシュ専用）
 - `fixuser` - 修復ユーザー一覧（ランキング/最近、score/absolute）
 - `grfuser` - 荒らしユーザー一覧（ランキング/最近、score/absolute）
@@ -181,6 +183,7 @@ JSON 形式は共通です:
 データは `data/` に保存されます（Docker 利用時は `/app/data`）。
 
 - `data/settings.json`
+- `data/achievement_rules.json` (実績付与ルール定義)
 - `data/user_activity.json`
 - `data/vandalized_pixels.json`
 - `data/vandal_daily.json`
@@ -188,6 +191,65 @@ JSON 形式は共通です:
 - `data/watch_targets.json` (追加監視ターゲット定義)
 - `data/progress_targets.json` (進捗監視ターゲット定義)
 - `data/template_img/` (監視用テンプレート画像)
+
+## 実績ルールJSON
+
+実績の付与条件は `data/achievement_rules.json` で定義できます。  
+Botは定期的（1分ごと）に `user_activity.json` を評価し、条件達成時に `achievements.json` へ付与します。  
+`/achievementchannel` が設定されているギルドには獲得通知を送信します。
+
+### ルール例
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "restorer_50",
+      "name": "Restorer 50",
+      "description": "修復数が50回に到達",
+      "conditions": {
+        "restored_count_gte": 50
+      }
+    }
+  ]
+}
+```
+
+### conditions キー解説
+
+すべての条件は **AND 条件** です（書いた条件をすべて満たした時に付与）。
+
+| key | 型 | 意味 |
+|---|---|---|
+| `vandal_count_gte` | number | 累計荒らし数がこの値以上 |
+| `restored_count_gte` | number | 累計修復数がこの値以上 |
+| `activity_score_gte` | number | 活動スコア（`修復数 - 荒らし数`）がこの値以上 |
+| `activity_score_lte` | number | 活動スコア（`修復数 - 荒らし数`）がこの値以下 |
+| `total_actions_gte` | number | 総アクション数（`修復数 + 荒らし数`）がこの値以上 |
+| `max_daily_vandal_gte` | number | 1日あたり荒らし数の最大値がこの値以上 |
+| `max_daily_restored_gte` | number | 1日あたり修復数の最大値がこの値以上 |
+| `active_days_gte` | number | 活動が1件以上あった日数（荒らし/修復どちらでも可）がこの値以上 |
+| `inactive_days_gte` | number | 最終観測からの経過日数がこの値以上 |
+| `discord_linked_required` | boolean | `true`: Discord連携済みユーザーのみ対象 / `false`: 未連携のみ対象 |
+
+`enabled: false` を指定すると、そのルールは評価対象から外れます。
+`inactive_days_gte` は `user_activity.json` の `last_seen` を基準に判定されます。
+
+### conditions 例
+
+```json
+{
+  "id": "elite_restorer",
+  "name": "Elite Restorer",
+  "description": "累計修復300回以上かつスコア+200以上",
+  "conditions": {
+    "restored_count_gte": 300,
+    "activity_score_gte": 200,
+    "discord_linked_required": true
+  }
+}
+```
 
 ## Discord 側の設定
 

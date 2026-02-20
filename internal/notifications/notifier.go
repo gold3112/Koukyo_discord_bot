@@ -69,6 +69,7 @@ type Notifier struct {
 	smallDiffCacheDiffLen    int
 	smallDiffCacheLimit      int
 	smallDiffCacheLines      []string
+	achievementEvalMu        sync.Mutex
 }
 
 // NewNotifier 通知システムを作成

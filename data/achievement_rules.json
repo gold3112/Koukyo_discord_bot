@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "first_steps",
+      "name": "First Steps",
+      "description": "総アクションが10回に到達",
+      "conditions": {
+        "total_actions_gte": 10
+      }
+    },
+    {
+      "id": "restorer_50",
+      "name": "Restorer 50",
+      "description": "修復数が50回に到達",
+      "conditions": {
+        "restored_count_gte": 50
+      }
+    },
+    {
+      "id": "vandal_watcher_50",
+      "name": "Vandal Watcher 50",
+      "description": "荒らし検知数が50回に到達",
+      "conditions": {
+        "vandal_count_gte": 50
+      }
+    },
+    {
+      "id": "daily_restorer_25",
+      "name": "Daily Restorer",
+      "description": "1日で修復25回以上",
+      "conditions": {
+        "max_daily_restored_gte": 25
+      }
+    },
+    {
+      "id": "score_guardian_100",
+      "name": "Guardian +100",
+      "description": "活動スコアが+100以上",
+      "conditions": {
+        "activity_score_gte": 100
+      }
+    },
+    {
+      "id": "three_day_dropout_vandal",
+      "name": "3日坊主(荒らし)",
+      "description": "荒らし寄りユーザーで4日以上活動が見られない",
+      "conditions": {
+        "vandal_count_gte": 1,
+        "activity_score_lte": -1,
+        "inactive_days_gte": 4
+      }
+    }
+  ]
+}

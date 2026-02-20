@@ -15,10 +15,10 @@ type Achievement struct {
 }
 
 type UserAchievements struct {
-	DiscordID   string        `json:"discord_id,omitempty"`
-	DiscordName string        `json:"discord_name,omitempty"`
-	WplaceID    string        `json:"wplace_id,omitempty"`
-	WplaceName  string        `json:"wplace_name,omitempty"`
+	DiscordID    string        `json:"discord_id,omitempty"`
+	DiscordName  string        `json:"discord_name,omitempty"`
+	WplaceID     string        `json:"wplace_id,omitempty"`
+	WplaceName   string        `json:"wplace_name,omitempty"`
 	Achievements []Achievement `json:"achievements,omitempty"`
 }
 
@@ -87,4 +87,27 @@ func (s *Store) Award(discordID string, achievement Achievement) bool {
 	}
 	user.Achievements = append(user.Achievements, achievement)
 	return true
+}
+
+func (s *Store) UpsertUserProfile(discordID, discordName, wplaceID, wplaceName string) {
+	if s == nil || discordID == "" {
+		return
+	}
+	if s.Users == nil {
+		s.Users = map[string]*UserAchievements{}
+	}
+	user := s.Users[discordID]
+	if user == nil {
+		user = &UserAchievements{DiscordID: discordID}
+		s.Users[discordID] = user
+	}
+	if discordName != "" {
+		user.DiscordName = discordName
+	}
+	if wplaceID != "" {
+		user.WplaceID = wplaceID
+	}
+	if wplaceName != "" {
+		user.WplaceName = wplaceName
+	}
 }

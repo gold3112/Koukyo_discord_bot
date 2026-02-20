@@ -16,6 +16,7 @@ func (n *Notifier) StartMonitoring() {
 	n.startDailyRankingLoop()
 	n.startWatchTargetsLoop()
 	n.startProgressTargetsLoop()
+	n.startAchievementLoop()
 	n.startDispatchWorker()
 	go func() {
 		defer func() {
