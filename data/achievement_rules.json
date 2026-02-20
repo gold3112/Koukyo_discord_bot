@@ -42,6 +42,70 @@
       }
     },
     {
+      "id": "score_guardian_1000",
+      "name": "Guardian +1000",
+      "description": "活動スコアが+1000以上",
+      "conditions": {
+        "activity_score_gte": 1000
+      }
+    },
+    {
+      "id": "score_guardian_5000",
+      "name": "Guardian +5000",
+      "description": "活動スコアが+5000以上",
+      "conditions": {
+        "activity_score_gte": 5000
+      }
+    },
+    {
+      "id": "score_guardian_10354",
+      "name": "Guardian +10354(1皇居)",
+      "description": "活動スコアが+10354以上",
+      "conditions": {
+        "activity_score_gte": 10354
+      }
+    },
+    {
+      "id": "score_destroyer_500",
+      "name": "Destroyer -500",
+      "description": "活動スコアが-500以下",
+      "conditions": {
+        "activity_score_lte": -500
+      }
+    },
+    {
+      "id": "score_destroyer_1000",
+      "name": "Destroyer -1000",
+      "description": "活動スコアが-1000以下",
+      "conditions": {
+        "activity_score_lte": -1000
+      }
+    },
+    {
+      "id": "score_destroyer_5000",
+      "name": "Destroyer -5000",
+      "description": "活動スコアが-5000以下",
+      "conditions": {
+        "activity_score_lte": -5000
+      }
+    },
+    {
+      "id": "score_destroyer_10354",
+      "name": "Destroyer -10354",
+      "description": "活動スコアが-10354以下",
+      "conditions": {
+        "activity_score_lte": -10354
+      }
+    },
+    {
+      "id": "are_you_sleepy_244070",
+      "name": "AreYouSleepy?",
+      "description": "総荒らし数が244070px以上",
+      "conditions": {
+        "vandal_count_gte": 244070
+      }
+    },
+    {
       "id": "three_day_dropout_vandal",
       "name": "3日坊主(荒らし)",
       "description": "荒らし寄りユーザーで4日以上活動が見られない",

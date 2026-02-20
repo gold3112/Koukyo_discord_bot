@@ -97,6 +97,8 @@ go run ./cmd/bot
 - `time` - 時刻表示/時差変換
 - `paint` - Paint 回復時間の計算（スラッシュ専用）
 
+※ `proxy` はチャンネルごとにWebhookを再利用し、Webhook由来の投稿者IDが毎回変わらないようにしています。
+
 ※ `graph` / `timelapse` / `heatmap` は WebSocket 監視が有効なときのみ利用できます。
 
 ## 追加監視 / 進捗監視

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
@@ -15,6 +16,18 @@ const (
 	proxyUsernamePrefix    = "[Golden Proxy]"
 	maxWebhookUsernameRune = 80
 )
+
+type proxyWebhookRef struct {
+	ID    string
+	Token string
+}
+
+var proxyWebhookCache = struct {
+	mu        sync.RWMutex
+	byChannel map[string]proxyWebhookRef
+}{
+	byChannel: make(map[string]proxyWebhookRef),
+}
 
 type ProxyCommand struct{}
 
@@ -178,17 +191,10 @@ func (c *ProxyCommand) sendProxyMessage(s *discordgo.Session, channelID string, 
 		threadID = channelID
 	}
 
-	webhook, err := s.WebhookCreate(webhookChannelID, proxyWebhookName, "")
+	webhook, err := getOrCreateProxyWebhook(s, webhookChannelID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create webhook: %w", err)
+		return nil, err
 	}
-
-	defer func() {
-		_, delErr := s.WebhookDeleteWithToken(webhook.ID, webhook.Token)
-		if delErr != nil {
-			log.Printf("proxy webhook cleanup failed: webhook_id=%s err=%v", webhook.ID, delErr)
-		}
-	}()
 
 	params := &discordgo.WebhookParams{
 		Content:   content,
@@ -199,11 +205,14 @@ func (c *ProxyCommand) sendProxyMessage(s *discordgo.Session, channelID string, 
 		},
 	}
 
-	var sentMsg *discordgo.Message
-	if threadID != "" {
-		sentMsg, err = s.WebhookThreadExecute(webhook.ID, webhook.Token, true, threadID, params)
-	} else {
-		sentMsg, err = s.WebhookExecute(webhook.ID, webhook.Token, true, params)
+	sentMsg, err := executeProxyWebhook(s, webhook, threadID, params)
+	if err != nil && shouldRefreshProxyWebhook(err) {
+		invalidateProxyWebhookCache(webhookChannelID)
+		webhook, err = getOrCreateProxyWebhook(s, webhookChannelID)
+		if err != nil {
+			return nil, err
+		}
+		sentMsg, err = executeProxyWebhook(s, webhook, threadID, params)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute webhook: %w", err)
@@ -306,4 +315,135 @@ func proxyUserFacingError(err error) string {
 		}
 	}
 	return err.Error()
+}
+
+func getOrCreateProxyWebhook(s *discordgo.Session, channelID string) (*discordgo.Webhook, error) {
+	if channelID == "" {
+		return nil, fmt.Errorf("channel id is empty")
+	}
+
+	if cached, ok := getCachedProxyWebhook(channelID); ok {
+		return &discordgo.Webhook{
+			ID:        cached.ID,
+			Token:     cached.Token,
+			ChannelID: channelID,
+			Name:      proxyWebhookName,
+		}, nil
+	}
+
+	webhook, err := findProxyWebhookInChannel(s, channelID)
+	if err != nil {
+		log.Printf("proxy webhook lookup failed (channel=%s): %v", channelID, err)
+	}
+	if webhook != nil && webhook.ID != "" && webhook.Token != "" {
+		cacheProxyWebhook(channelID, webhook)
+		return webhook, nil
+	}
+
+	webhook, err = s.WebhookCreate(channelID, proxyWebhookName, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webhook: %w", err)
+	}
+	cacheProxyWebhook(channelID, webhook)
+	return webhook, nil
+}
+
+func findProxyWebhookInChannel(s *discordgo.Session, channelID string) (*discordgo.Webhook, error) {
+	webhooks, err := s.ChannelWebhooks(channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	botID := ""
+	if s != nil && s.State != nil && s.State.User != nil {
+		botID = s.State.User.ID
+	}
+
+	for _, wh := range webhooks {
+		if wh == nil {
+			continue
+		}
+		if wh.Type != discordgo.WebhookTypeIncoming {
+			continue
+		}
+		if wh.Name != proxyWebhookName {
+			continue
+		}
+		// Prefer webhooks created by this bot application.
+		if botID != "" && wh.User != nil && wh.User.ID != "" && wh.User.ID != botID {
+			continue
+		}
+
+		if wh.Token == "" {
+			full, getErr := s.Webhook(wh.ID)
+			if getErr == nil && full != nil {
+				wh = full
+			}
+		}
+		if wh.Token == "" {
+			continue
+		}
+		return &discordgo.Webhook{
+			ID:        wh.ID,
+			Token:     wh.Token,
+			ChannelID: channelID,
+			Name:      proxyWebhookName,
+		}, nil
+	}
+
+	return nil, nil
+}
+
+func executeProxyWebhook(s *discordgo.Session, webhook *discordgo.Webhook, threadID string, params *discordgo.WebhookParams) (*discordgo.Message, error) {
+	if webhook == nil || webhook.ID == "" || webhook.Token == "" {
+		return nil, fmt.Errorf("proxy webhook is invalid")
+	}
+	if threadID != "" {
+		return s.WebhookThreadExecute(webhook.ID, webhook.Token, true, threadID, params)
+	}
+	return s.WebhookExecute(webhook.ID, webhook.Token, true, params)
+}
+
+func shouldRefreshProxyWebhook(err error) bool {
+	var restErr *discordgo.RESTError
+	if !errors.As(err, &restErr) {
+		return false
+	}
+	if restErr.Response == nil {
+		return false
+	}
+	switch restErr.Response.StatusCode {
+	case 401, 404:
+		return true
+	default:
+		return false
+	}
+}
+
+func getCachedProxyWebhook(channelID string) (proxyWebhookRef, bool) {
+	proxyWebhookCache.mu.RLock()
+	defer proxyWebhookCache.mu.RUnlock()
+	ref, ok := proxyWebhookCache.byChannel[channelID]
+	if !ok || ref.ID == "" || ref.Token == "" {
+		return proxyWebhookRef{}, false
+	}
+	return ref, true
+}
+
+func cacheProxyWebhook(channelID string, webhook *discordgo.Webhook) {
+	if channelID == "" || webhook == nil || webhook.ID == "" || webhook.Token == "" {
+		return
+	}
+	proxyWebhookCache.mu.Lock()
+	proxyWebhookCache.byChannel[channelID] = proxyWebhookRef{
+		ID:    webhook.ID,
+		Token: webhook.Token,
+	}
+	proxyWebhookCache.mu.Unlock()
+}
+
+func invalidateProxyWebhookCache(channelID string) {
+	proxyWebhookCache.mu.Lock()
+	delete(proxyWebhookCache.byChannel, channelID)
+	proxyWebhookCache.mu.Unlock()
 }

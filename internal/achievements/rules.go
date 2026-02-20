@@ -91,6 +91,70 @@ func DefaultRuleSet() *RuleSet {
 				},
 			},
 			{
+				ID:          "score_guardian_1000",
+				Name:        "Guardian +1000",
+				Description: "活動スコアが+1000以上",
+				Conditions: RuleConditions{
+					ActivityScoreGTE: intPtr(1000),
+				},
+			},
+			{
+				ID:          "score_guardian_5000",
+				Name:        "Guardian +5000",
+				Description: "活動スコアが+5000以上",
+				Conditions: RuleConditions{
+					ActivityScoreGTE: intPtr(5000),
+				},
+			},
+			{
+				ID:          "score_guardian_10354",
+				Name:        "Guardian +10354(1皇居)",
+				Description: "活動スコアが+10354以上",
+				Conditions: RuleConditions{
+					ActivityScoreGTE: intPtr(10354),
+				},
+			},
+			{
+				ID:          "score_destroyer_500",
+				Name:        "Destroyer -500",
+				Description: "活動スコアが-500以下",
+				Conditions: RuleConditions{
+					ActivityScoreLTE: intPtr(-500),
+				},
+			},
+			{
+				ID:          "score_destroyer_1000",
+				Name:        "Destroyer -1000",
+				Description: "活動スコアが-1000以下",
+				Conditions: RuleConditions{
+					ActivityScoreLTE: intPtr(-1000),
+				},
+			},
+			{
+				ID:          "score_destroyer_5000",
+				Name:        "Destroyer -5000",
+				Description: "活動スコアが-5000以下",
+				Conditions: RuleConditions{
+					ActivityScoreLTE: intPtr(-5000),
+				},
+			},
+			{
+				ID:          "score_destroyer_10354",
+				Name:        "Destroyer -10354",
+				Description: "活動スコアが-10354以下",
+				Conditions: RuleConditions{
+					ActivityScoreLTE: intPtr(-10354),
+				},
+			},
+			{
+				ID:          "are_you_sleepy_244070",
+				Name:        "AreYouSleepy?",
+				Description: "総荒らし数が244070px以上",
+				Conditions: RuleConditions{
+					VandalCountGTE: intPtr(244070),
+				},
+			},
+			{
 				ID:          "three_day_dropout_vandal",
 				Name:        "3日坊主(荒らし)",
 				Description: "荒らし寄りユーザーで4日以上活動が見られない",
