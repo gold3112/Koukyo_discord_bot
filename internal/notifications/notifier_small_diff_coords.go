@@ -40,8 +40,8 @@ func smallDiffCoordinatesFromDiffPNG(diffPNG []byte, limit int) ([]*utils.Coordi
 		return nil, nil
 	}
 
-	baseAbsX := mainMonitorTileX*utils.WplaceTileSize + mainMonitorPixelX
-	baseAbsY := mainMonitorTileY*utils.WplaceTileSize + mainMonitorPixelY
+	baseAbsX := utils.MainMonitorTileX*utils.WplaceTileSize + utils.MainMonitorPixelX
+	baseAbsY := utils.MainMonitorTileY*utils.WplaceTileSize + utils.MainMonitorPixelY
 
 	out := make([]*utils.Coordinate, 0, limit)
 	for y := b.Min.Y; y < b.Max.Y; y++ {

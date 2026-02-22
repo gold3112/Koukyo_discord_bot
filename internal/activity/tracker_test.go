@@ -43,6 +43,46 @@ func TestCloneUserActivityDeepCopy(t *testing.T) {
 	}
 }
 
+func TestGetCurrentDiffPainterCounts(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(Config{
+		TopLeftTileX:  0,
+		TopLeftTileY:  0,
+		TopLeftPixelX: 0,
+		TopLeftPixelY: 0,
+		Width:         2,
+		Height:        2,
+	}, nil, "")
+
+	tracker.vandalState.PixelToPainter = map[string]string{
+		pixelKey(0, 0): "1001",
+		pixelKey(1, 0): "1001",
+		pixelKey(2, 0): "1002",
+	}
+	tracker.activity["1001"] = &UserActivity{ID: "1001", Name: "alice"}
+	tracker.activity["1002"] = &UserActivity{ID: "1002", Name: "bob"}
+
+	all := tracker.GetCurrentDiffPainterCounts(0)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(all))
+	}
+	if all[0].UserID != "1001" || all[0].Pixels != 2 {
+		t.Fatalf("unexpected top entry: %+v", all[0])
+	}
+	if all[1].UserID != "1002" || all[1].Pixels != 1 {
+		t.Fatalf("unexpected second entry: %+v", all[1])
+	}
+
+	limited := tracker.GetCurrentDiffPainterCounts(1)
+	if len(limited) != 1 {
+		t.Fatalf("expected 1 entry with limit, got %d", len(limited))
+	}
+	if limited[0].UserID != "1001" || limited[0].Name != "alice" {
+		t.Fatalf("unexpected limited entry: %+v", limited[0])
+	}
+}
+
 func TestPowerSaveInferenceLifecycle(t *testing.T) {
 	t.Parallel()
 

@@ -5,6 +5,7 @@ import (
 	"Koukyo_discord_bot/internal/config"
 	"Koukyo_discord_bot/internal/embeds"
 	"Koukyo_discord_bot/internal/monitor"
+	"Koukyo_discord_bot/internal/utils"
 	"fmt"
 	"log"
 	"strings"
@@ -202,6 +203,8 @@ func (n *Notifier) getState(guildID string) *NotificationState {
 const smallDiffPixelLimit = 10
 
 const smallDiffMinUpdateInterval = 5 * time.Second
+
+const diffUserSummaryTopN = 5
 
 func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationState, content string, force bool) {
 	if n == nil || n.session == nil || state == nil || channelID == "" {
@@ -534,6 +537,7 @@ func (n *Notifier) sendLargeDiffTransitionSnapshot(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendCurrentDiffUserSummaryField(n, embed)
 	appendMainMonitorMapField(embed)
 
 	var files []*discordgo.File
@@ -662,6 +666,7 @@ func (n *Notifier) sendNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendCurrentDiffUserSummaryField(n, embed)
 	appendMainMonitorMapField(embed)
 
 	var files []*discordgo.File
@@ -761,6 +766,7 @@ func (n *Notifier) sendDecreaseNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendCurrentDiffUserSummaryField(n, embed)
 	appendMainMonitorMapField(embed)
 
 	var files []*discordgo.File
@@ -853,6 +859,7 @@ func (n *Notifier) sendZeroRecoveryNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendCurrentDiffUserSummaryField(n, embed)
 	appendMainMonitorMapField(embed)
 
 	var files []*discordgo.File
@@ -936,6 +943,7 @@ func (n *Notifier) sendZeroCompletionNotification(
 		Value:  fmt.Sprintf("全体 %d | 菊 %d | 背景 %d", data.TotalPixels, data.ChrysanthemumTotalPixels, data.BackgroundTotalPixels),
 		Inline: false,
 	})
+	appendCurrentDiffUserSummaryField(n, embed)
 	appendMainMonitorMapField(embed)
 
 	var files []*discordgo.File
@@ -967,6 +975,39 @@ func (n *Notifier) sendZeroCompletionNotification(
 	} else {
 		log.Printf("Zero completion notification sent to guild %s", guildID)
 	}
+}
+
+func appendCurrentDiffUserSummaryField(n *Notifier, embed *discordgo.MessageEmbed) {
+	if n == nil || n.monitor == nil || embed == nil {
+		return
+	}
+	all := n.monitor.GetCurrentDiffPainterCounts(0)
+	if len(all) == 0 {
+		return
+	}
+
+	limit := diffUserSummaryTopN
+	if limit <= 0 {
+		limit = len(all)
+	}
+	if limit > len(all) {
+		limit = len(all)
+	}
+
+	lines := make([]string, 0, limit+1)
+	for i := 0; i < limit; i++ {
+		item := all[i]
+		lines = append(lines, fmt.Sprintf("%s | %dpx", utils.FormatUserDisplayName(item.Name, item.UserID), item.Pixels))
+	}
+	if len(all) > limit {
+		lines = append(lines, fmt.Sprintf("...ほか%d人", len(all)-limit))
+	}
+
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "👥 同時検出ユーザー",
+		Value:  strings.Join(lines, "\n"),
+		Inline: false,
+	})
 }
 
 // ResetState サーバーの通知状態をリセット

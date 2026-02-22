@@ -136,6 +136,19 @@ func (m *Monitor) SetActivityTracker(tracker *activity.Tracker) {
 	m.tracker = tracker
 }
 
+func (m *Monitor) GetCurrentDiffPainterCounts(limit int) []activity.PainterPixelCount {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	tracker := m.tracker
+	m.mu.RUnlock()
+	if tracker == nil {
+		return nil
+	}
+	return tracker.GetCurrentDiffPainterCounts(limit)
+}
+
 // Connect WebSocketサーバーに接続
 func (m *Monitor) Connect() error {
 	monitorDebugf("Connecting to WebSocket: %s", m.URL)

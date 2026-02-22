@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "2.0.2"
+	Version = "2.0.3"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
@@ -10,8 +10,8 @@ const (
 
 // PatchNotes パッチノートの内容
 var PatchNotes = []string{
-	"実績ルールJSONを拡張（Guardian/Destroyer/AreYouSleepy?/3日坊主）",
-	"実績通知は起動時の初回評価をベースライン同期扱いにしてスパムを抑止",
-	"Discord未連携ユーザーでもゲーム内ユーザー基準で実績を付与可能に",
-	"proxyコマンドはチャンネル単位でWebhookを再利用し、Webhook由来IDの変動を抑制",
+	"nowコマンドにWplace.liveリンクと /get fullsize の導線を追加",
+	"差分通知Embedに同時検出ユーザー（user#id | xxpx）上位5件を表示",
+	"実績ストアでwplaceキーとDiscordキーの分断データを自動マージ",
+	"Wplace実装メモ（WPLACE_TECH_MEMO.md）を追加",
 }

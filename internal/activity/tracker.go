@@ -68,6 +68,12 @@ type UserActivity struct {
 	FixNotified         bool           `json:"fix_notified,omitempty"`
 }
 
+type PainterPixelCount struct {
+	UserID string `json:"user_id"`
+	Name   string `json:"name,omitempty"`
+	Pixels int    `json:"pixels"`
+}
+
 type VandalState struct {
 	VandalizedPixels [][]int           `json:"vandalized_pixels"`
 	PixelToPainter   map[string]string `json:"pixel_to_painter"`
@@ -202,6 +208,51 @@ func (t *Tracker) Start() {
 
 func (t *Tracker) Stop() {
 	t.cancel()
+}
+
+func (t *Tracker) GetCurrentDiffPainterCounts(limit int) []PainterPixelCount {
+	if t == nil {
+		return nil
+	}
+
+	t.mu.Lock()
+	if len(t.vandalState.PixelToPainter) == 0 {
+		t.mu.Unlock()
+		return nil
+	}
+	countsByUser := make(map[string]int, len(t.vandalState.PixelToPainter))
+	for _, userID := range t.vandalState.PixelToPainter {
+		if userID == "" {
+			continue
+		}
+		countsByUser[userID]++
+	}
+	nameByUser := make(map[string]string, len(countsByUser))
+	for userID := range countsByUser {
+		if entry := t.activity[userID]; entry != nil {
+			nameByUser[userID] = entry.Name
+		}
+	}
+	t.mu.Unlock()
+
+	list := make([]PainterPixelCount, 0, len(countsByUser))
+	for userID, pixels := range countsByUser {
+		list = append(list, PainterPixelCount{
+			UserID: userID,
+			Name:   nameByUser[userID],
+			Pixels: pixels,
+		})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Pixels == list[j].Pixels {
+			return list[i].UserID < list[j].UserID
+		}
+		return list[i].Pixels > list[j].Pixels
+	})
+	if limit > 0 && len(list) > limit {
+		list = list[:limit]
+	}
+	return list
 }
 
 func (t *Tracker) runWorker(name string, fn func()) {

@@ -228,6 +228,7 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 				Text: "監視システム起動中...",
 			},
 		}
+		appendMainMonitorMapField(embed)
 		return embed
 	}
 
@@ -247,6 +248,7 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 			},
 			Timestamp: now.UTC().Format(time.RFC3339),
 		}
+		appendMainMonitorMapField(embed)
 		return embed
 	}
 
@@ -325,8 +327,20 @@ func BuildNowEmbed(mon *monitor.Monitor) *discordgo.MessageEmbed {
 			Inline: false,
 		})
 	}
+	appendMainMonitorMapField(embed)
 
 	return embed
+}
+
+func appendMainMonitorMapField(embed *discordgo.MessageEmbed) {
+	if embed == nil {
+		return
+	}
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "Wplace.live",
+		Value:  fmt.Sprintf("[地図で見る](%s)\n`/get fullsize:%s`", utils.BuildMainMonitorWplaceURL(), utils.MainMonitorFullsizeString()),
+		Inline: false,
+	})
 }
 
 // getConnectionStatus 接続状態を取得

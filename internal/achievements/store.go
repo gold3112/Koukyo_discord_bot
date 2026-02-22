@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -60,38 +61,21 @@ func Save(path string, store *Store) error {
 }
 
 func (s *Store) GetByDiscordID(discordID string) *UserAchievements {
-	if s == nil || s.Users == nil {
-		return nil
-	}
-	if discordID == "" {
-		return nil
-	}
-	if user, ok := s.Users[discordID]; ok {
-		return user
-	}
-	return nil
+	user, _ := s.findUserByDiscordID(discordID)
+	return user
 }
 
 func (s *Store) GetByWplaceID(wplaceID string) *UserAchievements {
-	if s == nil || s.Users == nil || wplaceID == "" {
-		return nil
-	}
-	return s.Users[wplaceIdentityKey(wplaceID)]
+	user, _ := s.findUserByWplaceID(wplaceID)
+	return user
 }
 
 func (s *Store) GetByIdentity(discordID, wplaceID string) *UserAchievements {
-	if s == nil || s.Users == nil {
-		return nil
+	if user, _ := s.findUserByDiscordID(discordID); user != nil {
+		return user
 	}
-	if discordID != "" {
-		if user, ok := s.Users[discordID]; ok {
-			return user
-		}
-	}
-	if wplaceID != "" {
-		if user, ok := s.Users[wplaceIdentityKey(wplaceID)]; ok {
-			return user
-		}
+	if user, _ := s.findUserByWplaceID(wplaceID); user != nil {
+		return user
 	}
 	return nil
 }
@@ -101,20 +85,12 @@ func (s *Store) Award(discordID string, achievement Achievement) bool {
 }
 
 func (s *Store) AwardByIdentity(discordID, wplaceID string, achievement Achievement) bool {
-	key := resolveIdentityKey(discordID, wplaceID)
-	if s == nil || key == "" || achievement.ID == "" {
+	if s == nil || achievement.ID == "" {
 		return false
 	}
-	if s.Users == nil {
-		s.Users = map[string]*UserAchievements{}
-	}
-	user := s.Users[key]
+	user := s.ensureIdentityUser(discordID, wplaceID)
 	if user == nil {
-		user = &UserAchievements{
-			DiscordID: discordID,
-			WplaceID:  wplaceID,
-		}
-		s.Users[key] = user
+		return false
 	}
 	for _, a := range user.Achievements {
 		if a.ID == achievement.ID {
@@ -129,21 +105,15 @@ func (s *Store) AwardByIdentity(discordID, wplaceID string, achievement Achievem
 }
 
 func (s *Store) UpsertUserProfile(discordID, discordName, wplaceID, wplaceName string) {
-	key := resolveIdentityKey(discordID, wplaceID)
-	if s == nil || key == "" {
+	if s == nil {
 		return
 	}
-	if s.Users == nil {
-		s.Users = map[string]*UserAchievements{}
-	}
-	user := s.Users[key]
+	user := s.ensureIdentityUser(discordID, wplaceID)
 	if user == nil {
-		user = &UserAchievements{
-			DiscordID: discordID,
-			WplaceID:  wplaceID,
-		}
-		s.Users[key] = user
+		return
 	}
+	discordName = strings.TrimSpace(discordName)
+	wplaceName = strings.TrimSpace(wplaceName)
 	if discordID != "" {
 		user.DiscordID = discordID
 	}
@@ -156,6 +126,185 @@ func (s *Store) UpsertUserProfile(discordID, discordName, wplaceID, wplaceName s
 	if wplaceName != "" {
 		user.WplaceName = wplaceName
 	}
+}
+
+func (s *Store) findUserByDiscordID(discordID string) (*UserAchievements, string) {
+	if s == nil || s.Users == nil {
+		return nil, ""
+	}
+	discordID = strings.TrimSpace(discordID)
+	if discordID == "" {
+		return nil, ""
+	}
+	if user, ok := s.Users[discordID]; ok && user != nil {
+		return user, discordID
+	}
+	for key, user := range s.Users {
+		if user == nil {
+			continue
+		}
+		if strings.TrimSpace(user.DiscordID) == discordID {
+			return user, key
+		}
+	}
+	return nil, ""
+}
+
+func (s *Store) findUserByWplaceID(wplaceID string) (*UserAchievements, string) {
+	if s == nil || s.Users == nil {
+		return nil, ""
+	}
+	wplaceID = strings.TrimSpace(wplaceID)
+	if wplaceID == "" {
+		return nil, ""
+	}
+	key := wplaceIdentityKey(wplaceID)
+	if user, ok := s.Users[key]; ok && user != nil {
+		return user, key
+	}
+	for mapKey, user := range s.Users {
+		if user == nil {
+			continue
+		}
+		if strings.TrimSpace(user.WplaceID) == wplaceID {
+			return user, mapKey
+		}
+	}
+	return nil, ""
+}
+
+func (s *Store) ensureIdentityUser(discordID, wplaceID string) *UserAchievements {
+	if s == nil {
+		return nil
+	}
+	discordID = strings.TrimSpace(discordID)
+	wplaceID = strings.TrimSpace(wplaceID)
+	key := resolveIdentityKey(discordID, wplaceID)
+	if key == "" {
+		return nil
+	}
+	if s.Users == nil {
+		s.Users = map[string]*UserAchievements{}
+	}
+
+	discordUser, discordKey := s.findUserByDiscordID(discordID)
+	wplaceUser, wplaceKey := s.findUserByWplaceID(wplaceID)
+
+	user := discordUser
+	userKey := discordKey
+	if user == nil {
+		user = wplaceUser
+		userKey = wplaceKey
+	}
+	if user == nil {
+		user = &UserAchievements{}
+	}
+
+	if discordUser != nil && wplaceUser != nil && discordUser != wplaceUser {
+		mergeUserRecords(discordUser, wplaceUser)
+		user = discordUser
+		userKey = discordKey
+		if wplaceKey != "" {
+			delete(s.Users, wplaceKey)
+		}
+	}
+
+	if userKey != "" && userKey != key {
+		delete(s.Users, userKey)
+	}
+	if discordID != "" && wplaceKey != "" && wplaceKey != key {
+		delete(s.Users, wplaceKey)
+	}
+	s.Users[key] = user
+
+	if discordID != "" {
+		user.DiscordID = discordID
+	}
+	if wplaceID != "" {
+		user.WplaceID = wplaceID
+	}
+	return user
+}
+
+func mergeUserRecords(dst, src *UserAchievements) {
+	if dst == nil || src == nil || dst == src {
+		return
+	}
+	if dst.DiscordID == "" {
+		dst.DiscordID = src.DiscordID
+	}
+	if dst.DiscordName == "" {
+		dst.DiscordName = src.DiscordName
+	}
+	if dst.WplaceID == "" {
+		dst.WplaceID = src.WplaceID
+	}
+	if dst.WplaceName == "" {
+		dst.WplaceName = src.WplaceName
+	}
+	if len(src.Achievements) == 0 {
+		return
+	}
+
+	indexByID := map[string]int{}
+	for i, a := range dst.Achievements {
+		if a.ID == "" {
+			continue
+		}
+		indexByID[a.ID] = i
+	}
+	for _, a := range src.Achievements {
+		if a.ID == "" {
+			continue
+		}
+		if idx, ok := indexByID[a.ID]; ok {
+			dst.Achievements[idx] = mergeAchievement(dst.Achievements[idx], a)
+			continue
+		}
+		dst.Achievements = append(dst.Achievements, a)
+		indexByID[a.ID] = len(dst.Achievements) - 1
+	}
+}
+
+func mergeAchievement(dst, src Achievement) Achievement {
+	if dst.Name == "" {
+		dst.Name = src.Name
+	}
+	if dst.Description == "" {
+		dst.Description = src.Description
+	}
+	dst.AwardedAt = earlierAwardedAt(dst.AwardedAt, src.AwardedAt)
+	return dst
+}
+
+func earlierAwardedAt(a, b string) string {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	ta, errA := parseAwardedAt(a)
+	tb, errB := parseAwardedAt(b)
+	if errA == nil && errB == nil {
+		if tb.Before(ta) {
+			return b
+		}
+		return a
+	}
+	if errA != nil && errB == nil {
+		return b
+	}
+	return a
+}
+
+func parseAwardedAt(value string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, value)
 }
 
 func resolveIdentityKey(discordID, wplaceID string) string {
