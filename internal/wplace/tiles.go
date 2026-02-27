@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -39,8 +40,57 @@ var tileCache struct {
 	items map[string]tileCacheEntry
 }
 
+var (
+	tileURLFormat string
+	urlFormatMu   sync.RWMutex
+)
+
 func init() {
 	tileCache.items = make(map[string]tileCacheEntry)
+	detectTileURLFormat()
+}
+
+func detectTileURLFormat() {
+	// Test both URL formats with a known tile (0, 0)
+	formats := []string{
+		"https://backend.wplace.live/tile/%d/%d.png",
+		"https://backend.wplace.live/files/s0/tiles/%d/%d.png",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, format := range formats {
+		testURL := fmt.Sprintf(format, 0, 0)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+		if err != nil {
+			continue
+		}
+
+		resp, err := tileHTTPClient.Do(req)
+		if err != nil {
+			log.Printf("Tile URL format test failed for %s: %v", format, err)
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			tileURLFormat = format
+			log.Printf("✅ Detected working tile URL format: %s", format)
+			return
+		}
+		log.Printf("Tile URL format %s returned status %d", format, resp.StatusCode)
+	}
+
+	// Fallback to newer format
+	tileURLFormat = formats[0]
+	log.Printf("⚠️ No working tile URL format detected, using default: %s", tileURLFormat)
+}
+
+func GetTileURLFormat() string {
+	urlFormatMu.RLock()
+	defer urlFormatMu.RUnlock()
+	return tileURLFormat
 }
 
 func DownloadTile(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY int) ([]byte, error) {
@@ -53,7 +103,10 @@ func DownloadTileNoCache(ctx context.Context, limiter *utils.RateLimiter, tileX,
 
 func downloadTile(ctx context.Context, limiter *utils.RateLimiter, tileX, tileY int, useCache bool) ([]byte, error) {
 	cacheBust := time.Now().UnixNano() % 10000000
-	url := fmt.Sprintf("https://backend.wplace.live/tile/%d/%d.png?t=%d", tileX, tileY, cacheBust)
+	urlFormatMu.RLock()
+	format := tileURLFormat
+	urlFormatMu.RUnlock()
+	url := fmt.Sprintf(format+"?t=%d", tileX, tileY, cacheBust)
 	cacheKey := fmt.Sprintf("%d-%d", tileX, tileY)
 	if useCache {
 		if data, ok := getTileFromCache(cacheKey); ok {

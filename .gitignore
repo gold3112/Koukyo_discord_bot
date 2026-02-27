@@ -6,6 +6,9 @@
 *.out
 *.test
 
+# Go cache
+.gocache/
+
 # Vendor
 /vendor/
 
