@@ -37,7 +37,7 @@ URL 生成は `BuildWplaceURL` / `BuildWplacePixelURL` / `BuildWplaceHighDetailP
 `internal/wplace/tiles.go` で利用。
 
 - エンドポイント:  
-  `https://backend.wplace.live/files/s0/tiles/{tileX}/{tileY}.png?t={cacheBust}`
+  `https://backend.wplace.live/tile/{tileX}/{tileY}.png?t={cacheBust}`
 - 主用途:
   - `/get` のタイル取得/全域取得
   - `regionmap`

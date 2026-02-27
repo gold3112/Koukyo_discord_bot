@@ -118,6 +118,10 @@ func (p *monitorTextPayload) toMonitorData() *MonitorData {
 func NewMonitor(url string) *Monitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	pollURL := strings.TrimSpace(os.Getenv("MONITOR_POLL_URL"))
+	forceStandalone := os.Getenv("MONITOR_FORCE_STANDALONE") == "1"
+	if forceStandalone {
+		log.Println("⚠️ MONITOR_FORCE_STANDALONE enabled: starting in standalone mode without WebSocket")
+	}
 	return &Monitor{
 		URL:              url,
 		State:            NewMonitorState(),

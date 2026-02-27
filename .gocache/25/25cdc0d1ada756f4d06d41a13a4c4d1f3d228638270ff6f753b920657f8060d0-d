@@ -1,0 +1,5 @@
+./embeds.go
+./graphs.go
+./heatmap.go
+./images.go
+./timelapse.go

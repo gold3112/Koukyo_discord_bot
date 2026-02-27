@@ -57,10 +57,10 @@ func (c *ConvertCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageC
 	}
 
 	// backend.wplace.liveのタイルURLからタイル座標抽出
-	if strings.Contains(args[0], "backend.wplace.live/files/s0/tiles/") {
+	if strings.Contains(args[0], "backend.wplace.live/tile/") {
 		url := args[0]
 		var tileX, tileY int
-		if n, _ := fmt.Sscanf(url, "https://backend.wplace.live/files/s0/tiles/%d/%d.png", &tileX, &tileY); n == 2 {
+		if n, _ := fmt.Sscanf(url, "https://backend.wplace.live/tile/%d/%d.png", &tileX, &tileY); n == 2 {
 			// ハイフン形式: tileX-tileY-499-499（中央付近）
 			embed := embeds.BuildConvertPixelEmbed(tileX, tileY, 499, 499)
 			_, err := s.ChannelMessageSendEmbed(m.ChannelID, embed)

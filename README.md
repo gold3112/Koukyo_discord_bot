@@ -18,6 +18,7 @@ D:\Programing\VS_Code\go\secrets\koukyo_discord_bot.env
 DISCORD_TOKEN=your_discord_token_here
 WEBSOCKET_URL=wss://example.com/ws
 MONITOR_POLL_URL=https://example.com/monitor/status
+MONITOR_FORCE_STANDALONE=0
 MONITOR_STANDALONE_TARGET_ID=
 MONITOR_STANDALONE_ORIGIN=1818-806-989-358
 MONITOR_STANDALONE_TEMPLATE=1818-806-989-358.png
@@ -167,7 +168,8 @@ JSON 形式は共通です:
 - `DISCORD_TOKEN` (必須)
 - `WEBSOCKET_URL` (任意: 未指定の場合は監視機能が無効)
 - `MONITOR_POLL_URL` (任意: WebSocket が1分以上切断された際のHTTPフォールバック取得先)
-- `MONITOR_STANDALONE_TARGET_ID` (任意: WS断時の自前監視で使う watch target ID。指定時のみ watch_targets を参照)
+- `MONITOR_FORCE_STANDALONE` (任意: `1` で起動時から常にスタンドアローン監視モード。WSサーバーが停止している場合に有効)
+- `MONITOR_STANDALONE_TARGET_ID` (任意: WS断時/強制スタンドアローン時の自前監視で使う watch target ID。指定時のみ watch_targets を参照)
 - `MONITOR_STANDALONE_ORIGIN` (任意: watch target が解決できない場合のフォールバック座標)
 - `MONITOR_STANDALONE_TEMPLATE` (任意: watch target が解決できない場合のフォールバックテンプレート。既定: `1818-806-989-358.png`)
 - `POWER_SAVE_MODE` (任意: `1` で起動時に省電力モード)

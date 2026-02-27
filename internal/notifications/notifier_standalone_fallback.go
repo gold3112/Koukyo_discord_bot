@@ -16,12 +16,15 @@ const (
 	standaloneErrorNotifyEvery = 10 * time.Minute
 )
 
+var forceStandaloneMode = os.Getenv("MONITOR_FORCE_STANDALONE") == "1"
+
 func (n *Notifier) maybeRunStandaloneFallback(now time.Time) {
 	if n == nil || n.monitor == nil || n.watchTargetsState == nil {
 		return
 	}
 
-	if !n.monitor.IsWSUnavailableFor(standaloneTriggerAfter) {
+	wsUnavailable := forceStandaloneMode || n.monitor.IsWSUnavailableFor(standaloneTriggerAfter)
+	if !wsUnavailable {
 		n.leaveStandaloneFallbackIfActive(now)
 		n.resetStandaloneScheduleLocked()
 		return
@@ -146,7 +149,11 @@ func (n *Notifier) enterStandaloneFallbackIfNeeded(now time.Time) {
 	n.standaloneStartedAt = now
 	n.standaloneMu.Unlock()
 
-	n.notifyStandaloneToGuilds("⚠️ WS断が1分以上継続したため、スタンドアロン取得にフォールバックしました。")
+	if forceStandaloneMode {
+		n.notifyStandaloneToGuilds("🔧 MONITOR_FORCE_STANDALONE が有効のため、起動時からスタンドアロンモードで動作しています。")
+	} else {
+		n.notifyStandaloneToGuilds("⚠️ WS断が1分以上継続したため、スタンドアロン取得にフォールバックしました。")
+	}
 }
 
 func (n *Notifier) leaveStandaloneFallbackIfActive(now time.Time) {
