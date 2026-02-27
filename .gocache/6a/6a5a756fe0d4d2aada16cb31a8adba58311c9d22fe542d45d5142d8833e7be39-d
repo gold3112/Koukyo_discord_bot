@@ -1,8 +1,0 @@
-# test log
-stat C:\Users\tomos\AppData\Local\Temp\TestSettingsManagerCloseIsIdempotent2262410767\001\settings.json
-stat C:\Users\tomos\AppData\Local\Temp\TestSettingsManagerCloseFlushesDirtyState3052427090\001\settings.json
-open C:\Users\tomos\AppData\Local\Temp
-stat C:\Users\tomos\AppData\Local\Temp\TestSettingsManagerCloseFlushesDirtyState3052427090\001
-open C:\Users\tomos\AppData\Local\Temp\TestSettingsManagerCloseFlushesDirtyState3052427090\001\settings.json.tmp.3340700091
-open C:\Users\tomos\AppData\Local\Temp\TestSettingsManagerCloseFlushesDirtyState3052427090\001\settings.json
-open C:\Users\tomos\AppData\Local\Temp

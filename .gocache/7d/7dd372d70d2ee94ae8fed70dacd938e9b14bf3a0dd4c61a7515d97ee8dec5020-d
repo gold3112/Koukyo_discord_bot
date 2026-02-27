@@ -1,9 +1,0 @@
-./easter_eggs.go
-./get_shortcuts.go
-./handler.go
-./handler_interactions.go
-./handler_messages.go
-./handler_slash_sync.go
-./handler_startup.go
-./progress_targets.go
-./watch_targets.go

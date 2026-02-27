@@ -1,8 +1,0 @@
-./coordinator.go
-./discord.go
-./file.go
-./identicon.go
-./main_monitor.go
-./map_zoom.go
-./ratelimiter.go
-./timezone.go
