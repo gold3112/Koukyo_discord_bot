@@ -20,7 +20,7 @@ func smallDiffCoordinateLines(diffPNG []byte, limit int) ([]string, error) {
 	lines := make([]string, 0, len(coords))
 	for _, coord := range coords {
 		url := utils.BuildWplaceHighDetailPixelURL(coord)
-		lines = append(lines, fmt.Sprintf("- (%s:<%s>)", utils.FormatHyphenCoords(coord), url))
+		lines = append(lines, fmt.Sprintf("- ([%s](<%s>))", utils.FormatHyphenCoords(coord), url))
 	}
 	return lines, nil
 }
