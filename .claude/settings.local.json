@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"D:\\\\Programing\\\\VS_Code\\\\go\\\\Koukyo_discord_bot\" && wc -l internal/**/*.go | tail -1)"
+    ]
+  }
+}
