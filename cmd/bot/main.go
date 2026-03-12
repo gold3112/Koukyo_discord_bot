@@ -125,13 +125,6 @@ func main() {
 		log.Printf("Failed to open Discord session: %v", err)
 		return
 	}
-	defer func() {
-		h.Cleanup(dg)
-		if globalMonitor != nil {
-			globalMonitor.Stop()
-		}
-		dg.Close()
-	}()
 
 	log.Printf("Bot started - Version: %s, Date: %s\n", version.Version, time.Now().Format("2006-01-02"))
 	sigCh := make(chan os.Signal, 1)
@@ -139,4 +132,20 @@ func main() {
 	sig := <-sigCh
 	signal.Stop(sigCh)
 	log.Printf("Shutdown signal received: %s", sig.String())
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		h.Cleanup(dg)
+		if globalMonitor != nil {
+			globalMonitor.Stop()
+		}
+		dg.Close()
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+		log.Println("Shutdown complete")
+	case <-time.After(10 * time.Second):
+		log.Println("Shutdown timed out after 10s, forcing exit")
+	}
 }

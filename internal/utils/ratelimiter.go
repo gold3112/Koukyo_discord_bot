@@ -119,7 +119,15 @@ func (rl *RateLimiter) worker(hl *hostLimiter) {
 
 		case <-hl.done:
 			hl.ticker.Stop()
-			return
+			// Drain pending requests so callers don't block forever.
+			for {
+				select {
+				case req := <-hl.requests:
+					req.resultCh <- &result{err: context.Canceled}
+				default:
+					return
+				}
+			}
 		}
 	}
 }

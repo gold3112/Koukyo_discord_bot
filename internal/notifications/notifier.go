@@ -213,18 +213,24 @@ func (n *Notifier) upsertSmallDiffMessage(channelID string, state *NotificationS
 	now := time.Now()
 	if !force {
 		// Avoid hammering Discord with edits every tick; keep the loop responsive.
-		if content == state.SmallDiffLastContent && !state.SmallDiffNextUpdate.IsZero() && now.Before(state.SmallDiffNextUpdate) {
+		state.mu.Lock()
+		sameContent := content == state.SmallDiffLastContent
+		nextUpdate := state.SmallDiffNextUpdate
+		state.mu.Unlock()
+		if sameContent && !nextUpdate.IsZero() && now.Before(nextUpdate) {
 			return
 		}
-		if !state.SmallDiffNextUpdate.IsZero() && now.Before(state.SmallDiffNextUpdate) {
+		if !nextUpdate.IsZero() && now.Before(nextUpdate) {
 			return
 		}
 	}
 
 	// Optimistic throttle: even if the dispatcher is backlogged, avoid enqueuing
 	// edits too frequently.
+	state.mu.Lock()
 	state.SmallDiffLastContent = content
 	state.SmallDiffNextUpdate = now.Add(smallDiffMinUpdateInterval)
+	state.mu.Unlock()
 
 	// Coalesce small-diff updates per guild+channel: keep only the latest edit.
 	key := fmt.Sprintf("small:%s:%s", channelID, guildKeyFromState(state))
@@ -279,10 +285,9 @@ func (n *Notifier) resetAllSmallDiffMessageTracking() {
 		state.mu.Lock()
 		state.SmallDiffMessageID = ""
 		state.SmallDiffMessageChannelID = ""
-		state.mu.Unlock()
-
 		state.SmallDiffLastContent = ""
 		state.SmallDiffNextUpdate = time.Time{}
+		state.mu.Unlock()
 	}
 }
 
@@ -413,9 +418,9 @@ func (n *Notifier) handleLargeDiffTransition(
 		state.mu.Lock()
 		state.SmallDiffMessageID = ""
 		state.SmallDiffMessageChannelID = ""
-		state.mu.Unlock()
 		state.SmallDiffLastContent = ""
 		state.SmallDiffNextUpdate = time.Time{}
+		state.mu.Unlock()
 
 		if transitionedFromSmall {
 			n.sendLargeDiffTransitionSnapshot(guildID, settings, data, diffValue)
