@@ -72,6 +72,7 @@ func detectTileURLFormat() {
 			log.Printf("Tile URL format test failed for %s: %v", format, err)
 			continue
 		}
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
