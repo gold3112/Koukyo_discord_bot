@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	standaloneTriggerAfter = 1 * time.Minute
-	standaloneBaseInterval = 15 * time.Second
-	standaloneMaxInterval  = 5 * time.Minute
+	standaloneTriggerAfter     = 1 * time.Minute
+	standaloneBaseInterval     = 2 * time.Second
+	standaloneMaxInterval      = 5 * time.Minute
 	standaloneErrorNotifyEvery = 10 * time.Minute
+	kikuTemplateFile           = "1818-806-989-358_kiku_only.webp"
 )
 
 var forceStandaloneMode = os.Getenv("MONITOR_FORCE_STANDALONE") == "1"
@@ -52,12 +53,36 @@ func (n *Notifier) maybeRunStandaloneFallback(now time.Time) {
 		return
 	}
 
-	n.monitor.State.UpdateData(&monitor.MonitorData{
+	data := &monitor.MonitorData{
 		Type:           "standalone",
 		DiffPercentage: result.percent,
 		DiffPixels:     result.diffPixels,
 		TotalPixels:    result.template.OpaqueCount,
-	})
+	}
+
+	// 菊のみテンプレートで加重差分を計算する。
+	kikuTemplate, kikuErr := n.watchTargetsState.loadTemplateFromDataDir(n.dataDir, kikuTemplateFile)
+	if kikuErr == nil {
+		if liveImg, decodeErr := decodePNGToNRGBA(result.livePNG); decodeErr == nil {
+			kikuDiff, _ := buildDiffMask(kikuTemplate.Img, liveImg)
+			weighted := float64(kikuDiff) * 100 / float64(kikuTemplate.OpaqueCount)
+			data.WeightedDiffPercentage = &weighted
+			data.ChrysanthemumDiffPixels = kikuDiff
+			data.ChrysanthemumTotalPixels = kikuTemplate.OpaqueCount
+			bgDiff := result.diffPixels - kikuDiff
+			if bgDiff < 0 {
+				bgDiff = 0
+			}
+			data.BackgroundDiffPixels = bgDiff
+			data.BackgroundTotalPixels = result.template.OpaqueCount - kikuTemplate.OpaqueCount
+		} else {
+			log.Printf("standalone fallback: failed to decode live image for kiku diff: %v", decodeErr)
+		}
+	} else {
+		log.Printf("standalone fallback: kiku template unavailable, skipping weighted diff: %v", kikuErr)
+	}
+
+	n.monitor.State.UpdateData(data)
 	n.monitor.State.UpdateImages(&monitor.ImageData{
 		LiveImage: result.livePNG,
 		DiffImage: result.diffPNG,
