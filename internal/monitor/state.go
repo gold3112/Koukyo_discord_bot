@@ -3,6 +3,7 @@ package monitor
 import (
 	"bytes"
 	"container/ring"
+	"context"
 	"image/png"
 	"math"
 	"sort"
@@ -74,8 +75,10 @@ type MonitorState struct {
 	DailyPeakDiffImage []byte
 	// Daily diff summary tracking (JST)
 	DailySummaries map[string]DailySummary
-	heatmapQueue   chan []byte
-	mu             sync.RWMutex
+	heatmapQueue        chan []byte
+	heatmapStopOnce     sync.Once
+	heatmapCancelFunc   context.CancelFunc
+	mu                  sync.RWMutex
 }
 
 // DiffRecord 差分履歴のレコード
@@ -117,15 +120,24 @@ type ReferencePixels struct {
 
 // NewMonitorState 新しい監視状態を作成
 func NewMonitorState() *MonitorState {
+	ctx, cancel := context.WithCancel(context.Background())
 	ms := &MonitorState{
-		DiffHistory:         ring.New(historyLimit),
+		DiffHistory:       ring.New(historyLimit),
 		WeightedDiffHistory: ring.New(historyLimit),
-		PowerSaveMode:       false,
-		heatmapQueue:        make(chan []byte, 1),
-		DailySummaries:      make(map[string]DailySummary),
+		PowerSaveMode:     false,
+		heatmapQueue:      make(chan []byte, 1),
+		heatmapCancelFunc: cancel,
+		DailySummaries:    make(map[string]DailySummary),
 	}
-	ms.startHeatmapWorker()
+	ms.startHeatmapWorker(ctx)
 	return ms
+}
+
+// StopHeatmapWorker ヒートマップワーカーを停止する（Monitor.Stop から呼ぶ）
+func (ms *MonitorState) StopHeatmapWorker() {
+	ms.heatmapStopOnce.Do(func() {
+		ms.heatmapCancelFunc()
+	})
 }
 
 // UpdateData 監視データを更新
@@ -272,11 +284,16 @@ func (ms *MonitorState) UpdateImages(images *ImageData) {
 	}
 }
 
-func (ms *MonitorState) startHeatmapWorker() {
+func (ms *MonitorState) startHeatmapWorker(ctx context.Context) {
 	go func() {
-		for diff := range ms.heatmapQueue {
-			if err := ms.updateHeatmap(diff); err != nil {
-				continue
+		for {
+			select {
+			case diff := <-ms.heatmapQueue:
+				if diff != nil {
+					ms.updateHeatmap(diff) //nolint:errcheck
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()

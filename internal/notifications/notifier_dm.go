@@ -4,19 +4,22 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"Koukyo_discord_bot/internal/monitor"
 )
 
 const (
-	dmDiffThreshold = 10.0      // 加重差分率の通知閾値（%）
-	dmNotifyMetric  = "weighted" // 常に加重差分率を使用
+	dmDiffThreshold  = 10.0           // 加重差分率の通知閾値（%）
+	dmNotifyMetric   = "weighted"     // 常に加重差分率を使用
+	dmNotifyCooldown = 3 * time.Minute // 連続通知を防ぐクールダウン
 )
 
 type dmUserState struct {
-	mu       sync.Mutex
-	lastTier Tier
-	wasZero  bool
+	mu         sync.Mutex
+	lastTier   Tier
+	wasZero    bool
+	lastNotify time.Time
 }
 
 // CheckAndNotifyDM DM速報が有効な全ユーザーへの通知チェック
@@ -56,11 +59,13 @@ func (n *Notifier) getDMUserState(userID string) *dmUserState {
 func (n *Notifier) checkAndNotifyDMUser(userID string, _ *monitor.MonitorData, diffValue float64, isZero bool, currentTier Tier) {
 	state := n.getDMUserState(userID)
 	state.mu.Lock()
+
 	lastTier := state.lastTier
 	wasZero := state.wasZero
+
+	// 状態は毎ティック更新する（クールダウン中でも次回通知内容が正確になるよう）
 	state.lastTier = currentTier
 	state.wasZero = isZero
-	state.mu.Unlock()
 
 	var msg string
 	switch {
@@ -75,8 +80,19 @@ func (n *Notifier) checkAndNotifyDMUser(userID string, _ *monitor.MonitorData, d
 	}
 
 	if msg == "" {
+		state.mu.Unlock()
 		return
 	}
+
+	// クールダウンチェック（差分振動によるDMスパムを防止）
+	now := time.Now()
+	if !state.lastNotify.IsZero() && now.Sub(state.lastNotify) < dmNotifyCooldown {
+		state.mu.Unlock()
+		return
+	}
+	state.lastNotify = now
+	state.mu.Unlock()
+
 	n.enqueueHigh(func() {
 		n.sendDMNotification(userID, msg)
 	})

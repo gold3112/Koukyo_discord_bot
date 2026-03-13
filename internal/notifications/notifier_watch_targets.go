@@ -531,8 +531,10 @@ func resolveTemplatePath(dataDir, ref string) (string, error) {
 	}
 	base := filepath.Clean(filepath.Join(dataDir, templateImageDirName))
 	full := filepath.Clean(filepath.Join(base, cleanRef))
-	basePrefix := base + string(filepath.Separator)
-	if full != base && !strings.HasPrefix(full, basePrefix) {
+	// filepath.Rel を使い、full が base の外を指す相対パスになっていないか確認する。
+	// strings.HasPrefix より確実で、パス区切り文字の境界も正しく扱える。
+	rel, err := filepath.Rel(base, full)
+	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("template path is outside template_img: %s", ref)
 	}
 	return full, nil

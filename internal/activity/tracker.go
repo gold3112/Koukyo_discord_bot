@@ -1055,7 +1055,15 @@ func dateKeyJST() string {
 }
 
 func pixelKey(x, y int) string {
-	return fmt.Sprintf("(%d, %d)", x, y)
+	// strconv.AppendInt を使い fmt.Sprintf のフォーマット解析オーバーヘッドを回避。
+	// 形式は "(x, y)" のまま維持し、既存の vandalized_pixels.json との互換性を保つ。
+	buf := make([]byte, 0, 24)
+	buf = append(buf, '(')
+	buf = strconv.AppendInt(buf, int64(x), 10)
+	buf = append(buf, ',', ' ')
+	buf = strconv.AppendInt(buf, int64(y), 10)
+	buf = append(buf, ')')
+	return string(buf)
 }
 
 func recordRecentEvent(

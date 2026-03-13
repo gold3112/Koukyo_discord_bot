@@ -779,6 +779,7 @@ func (m *Monitor) GetLatestDiffImageMeta() (time.Time, int) {
 func (m *Monitor) Stop() {
 	log.Println("Stopping monitor...")
 	m.cancel()
+	m.State.StopHeatmapWorker()
 
 	m.mu.Lock()
 	if m.conn != nil {
