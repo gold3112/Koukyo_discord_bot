@@ -72,6 +72,8 @@ type Notifier struct {
 	smallDiffCacheLines      []string
 	achievementEvalMu        sync.Mutex
 	achievementBaselineReady bool
+	dmUserStatesMu           sync.Mutex
+	dmUserStates             map[string]*dmUserState
 }
 
 // NewNotifier 通知システムを作成
@@ -90,6 +92,7 @@ func NewNotifier(session *discordgo.Session, mon *monitor.Monitor, settings *con
 		fixUserNotifier:      NewFixUserNotifier(session, settings),
 		watchTargetsState:    newWatchTargetsRuntime(dataDir),
 		progressTargetsState: newProgressTargetsRuntime(dataDir),
+		dmUserStates:         make(map[string]*dmUserState),
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -34,22 +35,27 @@ var DefaultGuildSettings = GuildSettings{
 
 // SettingsManager 設定管理
 type SettingsManager struct {
-	filePath   string
-	settings   map[string]GuildSettings
-	mu         sync.RWMutex
-	dirty      bool
-	shutdownCh chan struct{}
-	closeOnce  sync.Once
-	saverDone  chan struct{}
+	filePath      string
+	settings      map[string]GuildSettings
+	userDMEnabled map[string]bool
+	userDMPath    string
+	mu            sync.RWMutex
+	dirty         bool
+	userDMDirty   bool
+	shutdownCh    chan struct{}
+	closeOnce     sync.Once
+	saverDone     chan struct{}
 }
 
 // NewSettingsManager 設定マネージャーを作成
 func NewSettingsManager(configPath string) *SettingsManager {
 	sm := &SettingsManager{
-		settings:   make(map[string]GuildSettings),
-		filePath:   configPath,
-		shutdownCh: make(chan struct{}),
-		saverDone:  make(chan struct{}),
+		settings:      make(map[string]GuildSettings),
+		userDMEnabled: make(map[string]bool),
+		filePath:      configPath,
+		userDMPath:    filepath.Join(filepath.Dir(configPath), "user_dm.json"),
+		shutdownCh:    make(chan struct{}),
+		saverDone:     make(chan struct{}),
 	}
 	if err := sm.load(); err != nil {
 		// log.Printf("Failed to load settings, starting with default: %v", err)
@@ -104,31 +110,40 @@ func (sm *SettingsManager) load() error {
 	if sm.settings == nil {
 		sm.settings = make(map[string]GuildSettings)
 	}
+	sm.loadUserDMUnsafe()
 	return nil
 }
 
 // SaveIfDirty 変更があれば設定をファイルに保存
 func (sm *SettingsManager) SaveIfDirty() error {
 	sm.mu.RLock()
-	if !sm.dirty {
-		sm.mu.RUnlock()
+	dirty := sm.dirty
+	dmDirty := sm.userDMDirty
+	sm.mu.RUnlock()
+
+	if !dirty && !dmDirty {
 		return nil
 	}
-	sm.mu.RUnlock()
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// ダブルチェック
-	if !sm.dirty {
-		return nil
+	var firstErr error
+	if sm.dirty {
+		if err := sm.saveUnsafe(); err == nil {
+			sm.dirty = false
+		} else {
+			firstErr = err
+		}
 	}
-
-	err := sm.saveUnsafe()
-	if err == nil {
-		sm.dirty = false
+	if sm.userDMDirty {
+		if err := sm.saveUserDMUnsafe(); err == nil {
+			sm.userDMDirty = false
+		} else if firstErr == nil {
+			firstErr = err
+		}
 	}
-	return err
+	return firstErr
 }
 
 func (sm *SettingsManager) saveUnsafe() error {
@@ -171,4 +186,60 @@ func (sm *SettingsManager) UpdateGuildSetting(guildID string, update func(*Guild
 	update(&settings)
 	sm.settings[guildID] = settings
 	sm.dirty = true
+}
+
+// loadUserDMUnsafe DMユーザー設定をファイルから読み込む（mu保持中に呼ぶこと）
+func (sm *SettingsManager) loadUserDMUnsafe() {
+	if sm.userDMPath == "" {
+		return
+	}
+	data, err := os.ReadFile(sm.userDMPath)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	var m map[string]bool
+	if err := json.Unmarshal(data, &m); err == nil && m != nil {
+		sm.userDMEnabled = m
+	}
+}
+
+// saveUserDMUnsafe DMユーザー設定をファイルに書き込む（mu保持中に呼ぶこと）
+func (sm *SettingsManager) saveUserDMUnsafe() error {
+	data, err := json.MarshalIndent(sm.userDMEnabled, "", "  ")
+	if err != nil {
+		return err
+	}
+	return utils.WriteFileAtomic(sm.userDMPath, data)
+}
+
+// GetUserDMEnabled ユーザーのDM通知設定を取得
+func (sm *SettingsManager) GetUserDMEnabled(userID string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.userDMEnabled[userID]
+}
+
+// SetUserDMEnabled ユーザーのDM通知設定を更新
+func (sm *SettingsManager) SetUserDMEnabled(userID string, enabled bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if enabled {
+		sm.userDMEnabled[userID] = true
+	} else {
+		delete(sm.userDMEnabled, userID)
+	}
+	sm.userDMDirty = true
+}
+
+// GetDMEnabledUserIDs DM通知が有効なユーザーIDの一覧を返す
+func (sm *SettingsManager) GetDMEnabledUserIDs() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	ids := make([]string, 0, len(sm.userDMEnabled))
+	for id, enabled := range sm.userDMEnabled {
+		if enabled {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

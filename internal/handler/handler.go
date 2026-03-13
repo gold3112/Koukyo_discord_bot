@@ -47,6 +47,7 @@ func NewHandler(prefix string, botInfo *models.BotInfo, mon *monitor.Monitor, se
 		commands.NewNotificationCommand(settingsManager),
 		commands.NewProgressChannelCommand(settingsManager),
 		commands.NewAchievementChannelCommand(settingsManager),
+		commands.NewDMCommand(settingsManager),
 		commands.NewGetCommand(limiter), // limiter を渡すように変更
 		commands.NewPaintCommand(),
 		commands.NewRegionMapCommand(),

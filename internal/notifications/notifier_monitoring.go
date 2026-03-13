@@ -67,6 +67,9 @@ func (n *Notifier) StartMonitoring() {
 				n.CheckAndNotify(guildID)
 			}
 
+			// DM速報チェック
+			n.CheckAndNotifyDM()
+
 			// タイムラプス完了の自動投稿
 			t := n.monitor.State.GetTimelapseCompletedAt()
 			if t != nil && (n.lastTimelapseCompletedAt == nil || t.After(*n.lastTimelapseCompletedAt)) {
