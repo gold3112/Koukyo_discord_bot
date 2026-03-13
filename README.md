@@ -52,13 +52,15 @@ go run ./cmd/bot
 - 差分通知（Tier 制、0%復帰/完了通知、ロールメンション対応）
 - 差分通知に同時検出ユーザーの内訳表示（`user#id | xxpx`、上位5件）
 - 小規模差分モード（10px以下）: 1つのテキスト通知を更新し続け、差分座標を高倍率URL付きで表示
+- **DM速報** (`/dm on`): 加重差分率10%以上のTier変動をユーザーへDM通知。`/dm off` で解除
 - 断定推定（vandal/restore 両対応）: 純増/純減のみの変化時に最初の検出ユーザーへ高確率帰属
 - サーバー別設定パネル（`/settings`）
 - ユーザー活動の追跡/可視化（荒らし/修復のスコア・履歴）
 - 画像生成（/now の結合画像、グラフ/ヒートマップ/タイムラプス）
 - 地図/タイル取得ユーティリティ（`/get`、`/regionmap`）
 - 追加監視（`watch_targets.json`）と進捗監視（`progress_targets.json`）
-- WebSocket 断時のフォールバック（HTTP Poll + Standalone監視）
+- WebSocket 断時のフォールバック（HTTP Poll → Standalone 2秒間隔ポーリング）
+  - Standalone 時は `data/1818-806-989-358_kiku_only.webp` で菊のみ加重差分を算出
 - 外部 API 向けのレートリミッター（既定 2 RPS）
 
 ## コマンド一覧
@@ -72,6 +74,7 @@ go run ./cmd/bot
 - `predict` - 修復速度から完全修復までの推定時間を表示
 - `timelapse` - 差分率 30%→0.2% のタイムラプス（GIF）
 - `heatmap` - 最近の変化量ヒートマップ
+- `dm` - 自分へのDM速報を有効/無効にする（加重差分率10%以上で通知）
 - `settings` - 通知/閾値などの設定パネル（管理者向け）
 - `notification` - 荒らし/修復ユーザー通知チャンネル設定（管理者向け）
 - `progresschannel` - ピクセルアート進捗通知チャンネル設定（管理者向け）
@@ -189,6 +192,7 @@ JSON 形式は共通です:
 データは `data/` に保存されます（Docker 利用時は `/app/data`）。
 
 - `data/settings.json`
+- `data/user_dm.json` (DM速報の有効ユーザー一覧)
 - `data/achievement_rules.json` (実績付与ルール定義)
 - `data/user_activity.json`
 - `data/vandalized_pixels.json`
@@ -197,6 +201,7 @@ JSON 形式は共通です:
 - `data/watch_targets.json` (追加監視ターゲット定義)
 - `data/progress_targets.json` (進捗監視ターゲット定義)
 - `data/template_img/` (監視用テンプレート画像)
+- `data/1818-806-989-358_kiku_only.webp` (Standalone 加重差分用・菊のみテンプレート)
 
 ## 実績ルールJSON
 
@@ -300,12 +305,15 @@ docker compose up --build
 - スラッシュコマンドが出てこない  
   -> Bot の再起動後に同期されます。権限不足や API エラーがある場合はログを確認してください。
 
-- 監視が動かない  
+- 監視が動かない
   -> `WEBSOCKET_URL` の設定と接続先の到達性を確認してください。
 
-- 通知が来ない  
+- 通知が来ない
   -> `/settings` で通知チャンネルを設定し、`auto_notify` が有効か確認してください。
   -> 進捗通知は `/progresschannel act:on` が必要です。
+
+- DM速報が届かない
+  -> `/dm on` で有効化してください。加重差分率が取得できない場合（WS未接続かつ kiku テンプレート未配置）は送信されません。
 
 ## GitHub 用メモ
 

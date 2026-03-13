@@ -65,6 +65,7 @@ cmd/bot/main.go
 - small diff（1..10px）専用フロー
 - 追加監視/進捗監視の定期比較
 - 日次サマリ、日次ランキング、タイムラプス自動配信
+- DM速報（ユーザー別・加重差分率 Tier 変動通知）
 
 ### ディスパッチ設計
 
@@ -79,6 +80,29 @@ cmd/bot/main.go
 - 形式: `- (tileX-tileY-pixelX-pixelY:URL)`
 - URL は `/me` 系と同じ高倍率ロジックを利用
 - 省電力モード入退出時に編集先メッセージ追跡をリセット
+
+### Standalone フォールバック
+
+主要ファイル: `internal/notifications/notifier_standalone_fallback.go`
+
+WS が 1 分以上断線した場合（または `MONITOR_FORCE_STANDALONE=1`）に自動起動するポーリングモード。
+
+- ポーリング間隔: **2 秒**（成功後も 2 秒待機、失敗時は指数バックオフ最大 5 分）
+- テンプレートで差分 (`DiffPixels`, `DiffPercentage`) を計算して `MonitorData` を更新
+- **加重差分**: `data/1818-806-989-358_kiku_only.webp` を `loadTemplateFromDataDir` で読み込み、同 diff 画像から菊のみ差分を算出し `WeightedDiffPercentage` / `ChrysanthemumDiffPixels` に格納
+- 算出した diff 画像を `monitor.EnqueueDiffImageToTracker` 経由で ActivityTracker へ連携
+- 復帰時はギルドの通知チャンネルへ状態変化を通知
+
+### DM速報フロー
+
+主要ファイル: `internal/notifications/notifier_dm.go`
+
+- 監視ループの毎ティックに `CheckAndNotifyDM()` を呼び出し
+- `SettingsManager.GetDMEnabledUserIDs()` で有効ユーザー一覧を取得
+- 各ユーザーは `dmUserState{lastTier, wasZero}` で Tier 状態を個別管理
+- 通知条件: `wasZero→nonzero`（検知）、`nonzero→0%`（完了）、Tier上昇・下降
+- 送信: `session.UserChannelCreate` で DM チャンネルを開き `ChannelMessageSend`
+- 常に `weighted` メトリクス・10% 閾値を使用
 
 ### 追加監視/進捗監視のエラーポリシー
 
@@ -172,6 +196,7 @@ cmd/bot/main.go
 `data/` 配下に保存:
 
 - `settings.json`
+- `user_dm.json` (DM速報の有効ユーザーID一覧)
 - `user_activity.json`
 - `vandalized_pixels.json`
 - `vandal_daily.json`
@@ -179,6 +204,7 @@ cmd/bot/main.go
 - `watch_targets.json`
 - `progress_targets.json`
 - `template_img/*`
+- `1818-806-989-358_kiku_only.webp` (Standalone 加重差分用・菊のみテンプレート)
 
 ## 主要テスト
 
@@ -194,4 +220,4 @@ cmd/bot/main.go
 
 ---
 
-最終更新: 2026-02-19
+最終更新: 2026-03-14
