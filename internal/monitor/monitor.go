@@ -564,6 +564,7 @@ func (m *Monitor) fetchPolledData() (*MonitorData, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain to allow connection reuse
 		return nil, fmt.Errorf("poll status=%d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)

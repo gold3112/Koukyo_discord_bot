@@ -48,7 +48,7 @@ func TestSmallDiffCoordinateLines(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 
-	if !strings.Contains(lines[0], "(1818-806-989-358:https://wplace.live/?") {
+	if !strings.Contains(lines[0], "[1818-806-989-358](<https://wplace.live/?") {
 		t.Fatalf("line does not include expected coordinate+url format: %s", lines[0])
 	}
 	if !strings.Contains(lines[0], "zoom=21.17") {
