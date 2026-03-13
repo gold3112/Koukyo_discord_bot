@@ -63,6 +63,7 @@ func (n *Notifier) maybeRunStandaloneFallback(now time.Time) {
 		DiffImage: result.diffPNG,
 		Timestamp: now,
 	})
+	n.monitor.EnqueueDiffImageToTracker(result.diffPNG)
 	n.scheduleStandaloneSuccess(now)
 }
 

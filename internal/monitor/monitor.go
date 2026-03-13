@@ -140,6 +140,21 @@ func (m *Monitor) SetActivityTracker(tracker *activity.Tracker) {
 	m.tracker = tracker
 }
 
+// EnqueueDiffImageToTracker forwards a diff PNG to the activity tracker.
+// Skipped when tracker is nil or power-save mode is active (mirrors WebSocket path).
+func (m *Monitor) EnqueueDiffImageToTracker(diffPNG []byte) {
+	if m == nil || len(diffPNG) == 0 {
+		return
+	}
+	m.mu.RLock()
+	tracker := m.tracker
+	m.mu.RUnlock()
+	if tracker == nil || m.State.IsPowerSaveMode() {
+		return
+	}
+	tracker.EnqueueDiffImage(diffPNG)
+}
+
 func (m *Monitor) GetCurrentDiffPainterCounts(limit int) []activity.PainterPixelCount {
 	if m == nil {
 		return nil
