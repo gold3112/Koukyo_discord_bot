@@ -29,6 +29,9 @@ Thumbs.db
 wplace_api_research.txt
 cmd/explore_api/
 
+# Sandbox (local research, never committed)
+sandbox/
+
 # Logs
 *.log
 
