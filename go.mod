@@ -1,6 +1,6 @@
 module Koukyo_discord_bot
 
-go 1.21
+go 1.25.0
 
 require (
 	github.com/bwmarrin/discordgo v0.29.0
@@ -10,7 +10,8 @@ require (
 )
 
 require (
-	golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b // indirect
-	golang.org/x/sys v0.0.0-20201119102817-f84b799fce68 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/crypto v0.49.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 )

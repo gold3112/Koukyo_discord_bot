@@ -187,12 +187,13 @@ func HandleUserListPagination(s *discordgo.Session, i *discordgo.InteractionCrea
 }
 
 type userListEntry struct {
-	ID       string
-	Name     string
-	Alliance string
-	Score    int
-	Count    int
-	LastSeen time.Time
+	ID         string
+	Name       string
+	AllianceID int
+	Alliance   string
+	Score      int
+	Count      int
+	LastSeen   time.Time
 }
 
 func buildUserListEmbed(dataDir, kind, mode, listType string, page int) (*discordgo.MessageEmbed, []discordgo.MessageComponent, error) {
@@ -348,12 +349,13 @@ func loadUserListEntries(dataDir, kind, listType string) ([]userListEntry, error
 		}
 		lastSeen := parseUserListTime(entry.LastSeen)
 		entries = append(entries, userListEntry{
-			ID:       id,
-			Name:     entry.Name,
-			Alliance: entry.AllianceName,
-			Score:    score,
-			Count:    count,
-			LastSeen: lastSeen,
+			ID:         id,
+			Name:       entry.Name,
+			AllianceID: entry.AllianceID,
+			Alliance:   entry.AllianceName,
+			Score:      score,
+			Count:      count,
+			LastSeen:   lastSeen,
 		})
 	}
 	return entries, nil

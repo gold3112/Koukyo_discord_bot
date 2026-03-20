@@ -42,6 +42,8 @@ type PaintedBy struct {
 	Picture      string `json:"picture"`
 	Discord      string `json:"discord"`
 	DiscordID    string `json:"discordId"`
+	Banned       bool   `json:"banned"`
+	TimedOut     bool   `json:"timedOut"`
 }
 
 type PixelRef struct {
@@ -52,6 +54,7 @@ type PixelRef struct {
 type UserActivity struct {
 	ID                  string         `json:"id"`
 	Name                string         `json:"name"`
+	AllianceID          int            `json:"allianceId,omitempty"`
 	AllianceName        string         `json:"allianceName"`
 	Discord             string         `json:"discord,omitempty"`
 	DiscordID           string         `json:"discord_id,omitempty"`
@@ -566,6 +569,9 @@ func (t *Tracker) processPixel(px Pixel) {
 	if effectivePainterID == detectedPainterID {
 		if painter.Name != "" {
 			entry.Name = painter.Name
+		}
+		if painter.AllianceID != 0 {
+			entry.AllianceID = painter.AllianceID
 		}
 		if painter.AllianceName != "" {
 			entry.AllianceName = painter.AllianceName

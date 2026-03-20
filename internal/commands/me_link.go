@@ -234,6 +234,9 @@ func updateUserActivityLink(dataDir string, painter *activity.PaintedBy, user *d
 	if painter.Name != "" {
 		entry.Name = painter.Name
 	}
+	if painter.AllianceID != 0 {
+		entry.AllianceID = painter.AllianceID
+	}
 	if painter.AllianceName != "" {
 		entry.AllianceName = painter.AllianceName
 	}
@@ -255,6 +258,7 @@ func updateUserActivityLink(dataDir string, painter *activity.PaintedBy, user *d
 	return userActivityEntry{
 		ID:            painterID,
 		Name:          entry.Name,
+		AllianceID:    entry.AllianceID,
 		Alliance:      entry.AllianceName,
 		Discord:       entry.Discord,
 		DiscordID:     entry.DiscordID,

@@ -323,6 +323,7 @@ func HandleUserActivitySelect(s *discordgo.Session, i *discordgo.InteractionCrea
 type userActivityEntry struct {
 	ID            string
 	Name          string
+	AllianceID    int
 	Alliance      string
 	Discord       string
 	DiscordID     string
@@ -509,6 +510,7 @@ func loadUserActivityEntries(dataDir, kind, listType string) ([]userActivityEntr
 		entries = append(entries, userActivityEntry{
 			ID:            id,
 			Name:          entry.Name,
+			AllianceID:    entry.AllianceID,
 			Alliance:      entry.AllianceName,
 			Discord:       entry.Discord,
 			DiscordID:     entry.DiscordID,
@@ -547,6 +549,7 @@ func loadUserActivityByDiscordName(dataDir, query string) ([]userActivityEntry, 
 		matches = append(matches, userActivityEntry{
 			ID:            id,
 			Name:          entry.Name,
+			AllianceID:    entry.AllianceID,
 			Alliance:      entry.AllianceName,
 			Discord:       entry.Discord,
 			DiscordID:     entry.DiscordID,
@@ -591,6 +594,7 @@ func loadUserActivityByName(dataDir, query string) ([]userActivityEntry, error) 
 		matches = append(matches, userActivityEntry{
 			ID:            id,
 			Name:          entry.Name,
+			AllianceID:    entry.AllianceID,
 			Alliance:      entry.AllianceName,
 			Discord:       entry.Discord,
 			DiscordID:     entry.DiscordID,
@@ -627,6 +631,7 @@ func loadUserActivityByID(dataDir, userID, discordID string) (userActivityEntry,
 			return userActivityEntry{
 				ID:            id,
 				Name:          entry.Name,
+				AllianceID:    entry.AllianceID,
 				Alliance:      entry.AllianceName,
 				Discord:       entry.Discord,
 				DiscordID:     entry.DiscordID,
@@ -641,6 +646,7 @@ func loadUserActivityByID(dataDir, userID, discordID string) (userActivityEntry,
 			return userActivityEntry{
 				ID:            id,
 				Name:          entry.Name,
+				AllianceID:    entry.AllianceID,
 				Alliance:      entry.AllianceName,
 				Discord:       entry.Discord,
 				DiscordID:     entry.DiscordID,

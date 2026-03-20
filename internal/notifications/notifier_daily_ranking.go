@@ -46,10 +46,11 @@ func (n *Notifier) startDailyRankingLoop() {
 }
 
 type rankingEntry struct {
-	ID       string
-	Name     string
-	Alliance string
-	Count    int
+	ID         string
+	Name       string
+	AllianceID int
+	Alliance   string
+	Count      int
 }
 
 func (n *Notifier) sendDailyRankingReport(reportTime time.Time) error {
@@ -226,10 +227,11 @@ func buildRanking(entries map[string]*activity.UserActivity, dateKey string, van
 			name = fmt.Sprintf("ID:%s", id)
 		}
 		out = append(out, rankingEntry{
-			ID:       id,
-			Name:     name,
-			Alliance: entry.AllianceName,
-			Count:    count,
+			ID:         id,
+			Name:       name,
+			AllianceID: entry.AllianceID,
+			Alliance:   entry.AllianceName,
+			Count:      count,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -332,10 +334,11 @@ func buildActivityRanking(entries map[string]*activity.UserActivity, dateKey str
 			name = fmt.Sprintf("ID:%s", id)
 		}
 		out = append(out, rankingEntry{
-			ID:       id,
-			Name:     name,
-			Alliance: entry.AllianceName,
-			Count:    count,
+			ID:         id,
+			Name:       name,
+			AllianceID: entry.AllianceID,
+			Alliance:   entry.AllianceName,
+			Count:      count,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

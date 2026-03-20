@@ -25,6 +25,10 @@ Thumbs.db
 # Env
 .env
 
+# Research notes (local only)
+wplace_api_research.txt
+cmd/explore_api/
+
 # Logs
 *.log
 
