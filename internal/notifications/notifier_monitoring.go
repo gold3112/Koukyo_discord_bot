@@ -18,6 +18,7 @@ func (n *Notifier) StartMonitoring() {
 	n.startProgressTargetsLoop()
 	n.startAchievementLoop()
 	n.startDispatchWorker()
+	n.startWplaceHealthLoop()
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
