@@ -66,14 +66,15 @@ func (n *Notifier) checkWplaceHealth(client *http.Client) {
 	if err != nil || (resp != nil && (!resp.Up || !resp.Database)) {
 		// 失敗
 		n.wplaceHealth.consecFails++
+		// 障害開始時刻は最初の失敗から記録する（通知タイミングではなく実際の障害開始）
+		if n.wplaceHealth.outageSince.IsZero() {
+			n.wplaceHealth.outageSince = time.Now()
+		}
 		reason := wplaceFailReason(resp, err)
 		log.Printf("wplace health check failed (%d/%d): %s",
 			n.wplaceHealth.consecFails, wplaceConsecFailsMax, reason)
 
 		if n.wplaceHealth.consecFails >= wplaceConsecFailsMax && !n.wplaceHealth.alerted {
-			if n.wplaceHealth.outageSince.IsZero() {
-				n.wplaceHealth.outageSince = time.Now()
-			}
 			n.wplaceHealth.alerted = true
 			go n.notifyWplaceOutage(reason)
 		}

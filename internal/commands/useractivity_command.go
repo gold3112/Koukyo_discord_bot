@@ -486,6 +486,23 @@ func buildUserAchievementSummary(dataDir string, entry userActivityEntry) string
 	return fmt.Sprintf("%d件\n%s", len(list), strings.Join(lines, "\n"))
 }
 
+// activityToEntry は *activity.UserActivity を userActivityEntry に変換する共通ヘルパー。
+func activityToEntry(id string, e *activity.UserActivity) userActivityEntry {
+	return userActivityEntry{
+		ID:            id,
+		Name:          e.Name,
+		AllianceID:    e.AllianceID,
+		Alliance:      e.AllianceName,
+		Discord:       e.Discord,
+		DiscordID:     e.DiscordID,
+		Picture:       e.Picture,
+		VandalCount:   e.VandalCount,
+		RestoredCount: e.RestoredCount,
+		Score:         activityScore(e.RestoredCount, e.VandalCount),
+		LastSeen:      parseUserListTime(e.LastSeen),
+	}
+}
+
 func loadUserActivityEntries(dataDir, kind, listType string) ([]userActivityEntry, error) {
 	path := filepath.Join(dataDir, "user_activity.json")
 	data, err := os.ReadFile(path)
@@ -498,28 +515,15 @@ func loadUserActivityEntries(dataDir, kind, listType string) ([]userActivityEntr
 	}
 
 	entries := make([]userActivityEntry, 0, len(raw))
-	for id, entry := range raw {
-		score := activityScore(entry.RestoredCount, entry.VandalCount)
+	for id, e := range raw {
+		score := activityScore(e.RestoredCount, e.VandalCount)
 		if kind == userListKindFix && score <= 0 {
 			continue
 		}
 		if kind == userListKindGrf && score >= 0 {
 			continue
 		}
-		lastSeen := parseUserListTime(entry.LastSeen)
-		entries = append(entries, userActivityEntry{
-			ID:            id,
-			Name:          entry.Name,
-			AllianceID:    entry.AllianceID,
-			Alliance:      entry.AllianceName,
-			Discord:       entry.Discord,
-			DiscordID:     entry.DiscordID,
-			Picture:       entry.Picture,
-			VandalCount:   entry.VandalCount,
-			RestoredCount: entry.RestoredCount,
-			Score:         score,
-			LastSeen:      lastSeen,
-		})
+		entries = append(entries, activityToEntry(id, e))
 	}
 	return entries, nil
 }
@@ -546,19 +550,7 @@ func loadUserActivityByDiscordName(dataDir, query string) ([]userActivityEntry, 
 		if !strings.Contains(strings.ToLower(entry.Discord), queryLower) {
 			continue
 		}
-		matches = append(matches, userActivityEntry{
-			ID:            id,
-			Name:          entry.Name,
-			AllianceID:    entry.AllianceID,
-			Alliance:      entry.AllianceName,
-			Discord:       entry.Discord,
-			DiscordID:     entry.DiscordID,
-			Picture:       entry.Picture,
-			VandalCount:   entry.VandalCount,
-			RestoredCount: entry.RestoredCount,
-			Score:         activityScore(entry.RestoredCount, entry.VandalCount),
-			LastSeen:      parseUserListTime(entry.LastSeen),
-		})
+		matches = append(matches, activityToEntry(id, entry))
 	}
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].Score == matches[j].Score {
@@ -591,19 +583,7 @@ func loadUserActivityByName(dataDir, query string) ([]userActivityEntry, error) 
 		if !strings.Contains(strings.ToLower(entry.Name), queryLower) {
 			continue
 		}
-		matches = append(matches, userActivityEntry{
-			ID:            id,
-			Name:          entry.Name,
-			AllianceID:    entry.AllianceID,
-			Alliance:      entry.AllianceName,
-			Discord:       entry.Discord,
-			DiscordID:     entry.DiscordID,
-			Picture:       entry.Picture,
-			VandalCount:   entry.VandalCount,
-			RestoredCount: entry.RestoredCount,
-			Score:         activityScore(entry.RestoredCount, entry.VandalCount),
-			LastSeen:      parseUserListTime(entry.LastSeen),
-		})
+		matches = append(matches, activityToEntry(id, entry))
 	}
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].Score == matches[j].Score {
@@ -628,34 +608,10 @@ func loadUserActivityByID(dataDir, userID, discordID string) (userActivityEntry,
 	normalizedUser := strings.TrimSpace(userID)
 	for id, entry := range raw {
 		if normalizedUser != "" && id == normalizedUser {
-			return userActivityEntry{
-				ID:            id,
-				Name:          entry.Name,
-				AllianceID:    entry.AllianceID,
-				Alliance:      entry.AllianceName,
-				Discord:       entry.Discord,
-				DiscordID:     entry.DiscordID,
-				Picture:       entry.Picture,
-				VandalCount:   entry.VandalCount,
-				RestoredCount: entry.RestoredCount,
-				Score:         activityScore(entry.RestoredCount, entry.VandalCount),
-				LastSeen:      parseUserListTime(entry.LastSeen),
-			}, nil
+			return activityToEntry(id, entry), nil
 		}
 		if normalizedDiscord != "" && strings.EqualFold(entry.DiscordID, normalizedDiscord) {
-			return userActivityEntry{
-				ID:            id,
-				Name:          entry.Name,
-				AllianceID:    entry.AllianceID,
-				Alliance:      entry.AllianceName,
-				Discord:       entry.Discord,
-				DiscordID:     entry.DiscordID,
-				Picture:       entry.Picture,
-				VandalCount:   entry.VandalCount,
-				RestoredCount: entry.RestoredCount,
-				Score:         activityScore(entry.RestoredCount, entry.VandalCount),
-				LastSeen:      parseUserListTime(entry.LastSeen),
-			}, nil
+			return activityToEntry(id, entry), nil
 		}
 	}
 	return userActivityEntry{}, fmt.Errorf("該当ユーザーが見つかりません")
@@ -708,10 +664,7 @@ func buildUserActivityImageFile(entry userActivityEntry) *discordgo.File {
 }
 
 func buildUserActivitySearchEmbed(query string, entries []userActivityEntry) (*discordgo.MessageEmbed, []discordgo.MessageComponent) {
-	limit := len(entries)
-	if limit > userActivityMaxSelectItems {
-		limit = userActivityMaxSelectItems
-	}
+	limit := min(len(entries), userActivityMaxSelectItems)
 	options := make([]discordgo.SelectMenuOption, 0, limit)
 	lines := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
@@ -753,12 +706,12 @@ func buildUserActivitySearchEmbed(query string, entries []userActivityEntry) (*d
 	return embed, components
 }
 
-func truncateLabel(value string, max int) string {
-	if len(value) <= max {
+func truncateLabel(value string, maxLen int) string {
+	if len(value) <= maxLen {
 		return value
 	}
-	if max <= 3 {
-		return value[:max]
+	if maxLen <= 3 {
+		return value[:maxLen]
 	}
-	return value[:max-3] + "..."
+	return value[:maxLen-3] + "..."
 }

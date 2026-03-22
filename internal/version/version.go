@@ -2,7 +2,7 @@ package version
 
 const (
 	// Botのバージョン番号
-	Version = "2.0.4"
+	Version = "2.1.0"
 
 	// SupportServerURL サポートサーバーのURL
 	SupportServerURL = "https://discord.gg/AgzmhFk43Z"
@@ -10,8 +10,8 @@ const (
 
 // PatchNotes パッチノートの内容
 var PatchNotes = []string{
+	"wplace障害検知機能を追加：サーバー障害時・復旧時に通知チャンネルへ自動通知",
+	"AllianceID管理を強化：IDによるアライアンス同一性判定に対応（名前偽装対策）",
+	"AllianceIDを荒らし/修復ユーザーの記録・日報ランキング・ユーザー検索に反映",
 	"/dm on|off コマンドを追加：加重差分率10%以上でDM速報を受け取れます",
-	"スタンドアロンフォールバックの取得間隔を2秒に短縮",
-	"スタンドアロン時に菊のみテンプレートで加重差分を計算",
-	"スタンドアロン時にActivityTrackerへ差分画像を連携",
 }
