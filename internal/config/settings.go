@@ -3,6 +3,8 @@ package config
 import (
 	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
+	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -58,7 +60,7 @@ func NewSettingsManager(configPath string) *SettingsManager {
 		saverDone:     make(chan struct{}),
 	}
 	if err := sm.load(); err != nil {
-		// log.Printf("Failed to load settings, starting with default: %v", err)
+		log.Printf("Failed to load settings, starting with defaults: %v", err)
 	}
 	go sm.periodicSaver(30 * time.Second)
 	return sm
@@ -92,25 +94,33 @@ func (sm *SettingsManager) load() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if _, err := os.Stat(sm.filePath); os.IsNotExist(err) {
-		return nil // 新規作成
-	}
-
-	data, err := os.ReadFile(sm.filePath)
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return nil // 空ファイル
-	}
-
-	if err := json.Unmarshal(data, &sm.settings); err != nil {
-		return err
-	}
-	if sm.settings == nil {
+	var loaded map[string]GuildSettings
+	source, err := utils.ReadJSONFileWithBackup(sm.filePath, &loaded)
+	switch {
+	case err == nil:
+		for guildID, settings := range loaded {
+			loaded[guildID] = normalizeGuildSettings(settings)
+		}
+		sm.settings = loaded
+		if sm.settings == nil {
+			sm.settings = make(map[string]GuildSettings)
+		}
+		if source == utils.BackupPath(sm.filePath) {
+			sm.dirty = true
+		}
+	case errors.Is(err, os.ErrNotExist):
 		sm.settings = make(map[string]GuildSettings)
+	default:
+		return err
 	}
-	sm.loadUserDMUnsafe()
+
+	if dmSource, dmErr := sm.loadUserDMUnsafe(); dmErr == nil {
+		if dmSource == utils.BackupPath(sm.userDMPath) {
+			sm.userDMDirty = true
+		}
+	} else if !errors.Is(dmErr, os.ErrNotExist) {
+		log.Printf("Failed to load user DM settings: %v", dmErr)
+	}
 	return nil
 }
 
@@ -161,7 +171,7 @@ func (sm *SettingsManager) GetGuildSettings(guildID string) GuildSettings {
 	defer sm.mu.RUnlock()
 
 	if settings, ok := sm.settings[guildID]; ok {
-		return settings
+		return normalizeGuildSettings(settings)
 	}
 
 	return DefaultGuildSettings
@@ -171,7 +181,7 @@ func (sm *SettingsManager) GetGuildSettings(guildID string) GuildSettings {
 func (sm *SettingsManager) SetGuildSettings(guildID string, settings GuildSettings) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.settings[guildID] = settings
+	sm.settings[guildID] = normalizeGuildSettings(settings)
 	sm.dirty = true
 }
 
@@ -183,24 +193,26 @@ func (sm *SettingsManager) UpdateGuildSetting(guildID string, update func(*Guild
 	if !ok {
 		settings = DefaultGuildSettings
 	}
+	settings = normalizeGuildSettings(settings)
 	update(&settings)
-	sm.settings[guildID] = settings
+	sm.settings[guildID] = normalizeGuildSettings(settings)
 	sm.dirty = true
 }
 
 // loadUserDMUnsafe DMユーザー設定をファイルから読み込む（mu保持中に呼ぶこと）
-func (sm *SettingsManager) loadUserDMUnsafe() {
+func (sm *SettingsManager) loadUserDMUnsafe() (string, error) {
 	if sm.userDMPath == "" {
-		return
-	}
-	data, err := os.ReadFile(sm.userDMPath)
-	if err != nil || len(data) == 0 {
-		return
+		return "", os.ErrNotExist
 	}
 	var m map[string]bool
-	if err := json.Unmarshal(data, &m); err == nil && m != nil {
+	source, err := utils.ReadJSONFileWithBackup(sm.userDMPath, &m)
+	if err != nil {
+		return "", err
+	}
+	if m != nil {
 		sm.userDMEnabled = m
 	}
+	return source, nil
 }
 
 // saveUserDMUnsafe DMユーザー設定をファイルに書き込む（mu保持中に呼ぶこと）
@@ -242,4 +254,38 @@ func (sm *SettingsManager) GetDMEnabledUserIDs() []string {
 		}
 	}
 	return ids
+}
+
+func normalizeGuildSettings(settings GuildSettings) GuildSettings {
+	normalized := DefaultGuildSettings
+	normalized.NotificationChannel = settings.NotificationChannel
+	normalized.NotificationVandalChannel = settings.NotificationVandalChannel
+	normalized.NotificationFixChannel = settings.NotificationFixChannel
+	normalized.AchievementChannel = settings.AchievementChannel
+	normalized.ProgressChannel = settings.ProgressChannel
+	normalized.MentionRole = settings.MentionRole
+
+	if settings.AutoNotifyEnabled || !looksLikeLegacyNotificationSettings(settings) {
+		normalized.AutoNotifyEnabled = settings.AutoNotifyEnabled
+	}
+	if settings.ProgressNotifyEnabled || settings.ProgressChannel != nil {
+		normalized.ProgressNotifyEnabled = settings.ProgressNotifyEnabled
+	}
+	if settings.NotificationThreshold > 0 {
+		normalized.NotificationThreshold = settings.NotificationThreshold
+	}
+	if settings.MentionThreshold > 0 {
+		normalized.MentionThreshold = settings.MentionThreshold
+	}
+	if settings.NotificationMetric == "overall" || settings.NotificationMetric == "weighted" {
+		normalized.NotificationMetric = settings.NotificationMetric
+	}
+	return normalized
+}
+
+func looksLikeLegacyNotificationSettings(settings GuildSettings) bool {
+	return !settings.AutoNotifyEnabled &&
+		settings.NotificationThreshold == 0 &&
+		settings.MentionThreshold == 0 &&
+		settings.NotificationMetric == ""
 }

@@ -2,11 +2,8 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -216,58 +213,51 @@ func (c *MeCommand) pollLinkResult(s *discordgo.Session, user *discordgo.User, s
 }
 
 func updateUserActivityLink(dataDir string, painter *activity.PaintedBy, user *discordgo.User) (userActivityEntry, error) {
-	path := filepath.Join(dataDir, "user_activity.json")
-	raw := make(map[string]*activity.UserActivity)
-	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
-		_ = json.Unmarshal(data, &raw)
-	}
 	painterID := strconv.Itoa(painter.ID)
-	entry := raw[painterID]
-	if entry == nil {
-		entry = &activity.UserActivity{
-			ID: painterID,
+	var result userActivityEntry
+	err := activity.UpdateUserActivityMap(dataDir, func(raw map[string]*activity.UserActivity) error {
+		entry := raw[painterID]
+		if entry == nil {
+			entry = &activity.UserActivity{ID: painterID}
 		}
-	}
-	if entry.DiscordID != "" && entry.DiscordID != user.ID {
-		return userActivityEntry{}, fmt.Errorf("このWplaceユーザーは別のDiscordと紐づけ済みです")
-	}
-	if painter.Name != "" {
-		entry.Name = painter.Name
-	}
-	if painter.AllianceID != 0 {
-		entry.AllianceID = painter.AllianceID
-	}
-	if painter.AllianceName != "" {
-		entry.AllianceName = painter.AllianceName
-	}
-	if painter.Picture != "" {
-		entry.Picture = painter.Picture
-	}
-	entry.DiscordID = user.ID
-	entry.Discord = discordTag(user)
-	entry.LastSeen = time.Now().UTC().Format(time.RFC3339Nano)
-	raw[painterID] = entry
-
-	payload, err := json.MarshalIndent(raw, "", "  ")
+		if entry.DiscordID != "" && entry.DiscordID != user.ID {
+			return fmt.Errorf("このWplaceユーザーは別のDiscordと紐づけ済みです")
+		}
+		if painter.Name != "" {
+			entry.Name = painter.Name
+		}
+		if painter.AllianceID != 0 {
+			entry.AllianceID = painter.AllianceID
+		}
+		if painter.AllianceName != "" {
+			entry.AllianceName = painter.AllianceName
+		}
+		if painter.Picture != "" {
+			entry.Picture = painter.Picture
+		}
+		entry.DiscordID = user.ID
+		entry.Discord = discordTag(user)
+		entry.LastSeen = time.Now().UTC().Format(time.RFC3339Nano)
+		raw[painterID] = entry
+		result = userActivityEntry{
+			ID:            painterID,
+			Name:          entry.Name,
+			AllianceID:    entry.AllianceID,
+			Alliance:      entry.AllianceName,
+			Discord:       entry.Discord,
+			DiscordID:     entry.DiscordID,
+			Picture:       entry.Picture,
+			VandalCount:   entry.VandalCount,
+			RestoredCount: entry.RestoredCount,
+			Score:         entry.ActivityScore,
+			LastSeen:      parseUserListTime(entry.LastSeen),
+		}
+		return nil
+	})
 	if err != nil {
 		return userActivityEntry{}, err
 	}
-	if err := os.WriteFile(path, payload, 0644); err != nil {
-		return userActivityEntry{}, err
-	}
-	return userActivityEntry{
-		ID:            painterID,
-		Name:          entry.Name,
-		AllianceID:    entry.AllianceID,
-		Alliance:      entry.AllianceName,
-		Discord:       entry.Discord,
-		DiscordID:     entry.DiscordID,
-		Picture:       entry.Picture,
-		VandalCount:   entry.VandalCount,
-		RestoredCount: entry.RestoredCount,
-		Score:         entry.ActivityScore,
-		LastSeen:      parseUserListTime(entry.LastSeen),
-	}, nil
+	return result, nil
 }
 
 func sendDM(s *discordgo.Session, userID, content string) error {

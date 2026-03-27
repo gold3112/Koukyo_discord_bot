@@ -3,6 +3,7 @@ package achievements
 import (
 	"Koukyo_discord_bot/internal/utils"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -29,24 +30,24 @@ type Store struct {
 }
 
 func Load(path string) (*Store, error) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return &Store{Users: map[string]*UserAchievements{}}, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) == 0 {
-		return &Store{Users: map[string]*UserAchievements{}}, nil
-	}
 	var store Store
-	if err := json.Unmarshal(data, &store); err != nil {
+	source, err := utils.ReadJSONFileWithBackup(path, &store)
+	switch {
+	case err == nil:
+		if store.Users == nil {
+			store.Users = map[string]*UserAchievements{}
+		}
+		if source == utils.BackupPath(path) {
+			if saveErr := Save(path, &store); saveErr != nil {
+				return nil, fmt.Errorf("recovered achievements from backup but failed to rewrite primary: %w", saveErr)
+			}
+		}
+		return &store, nil
+	case errors.Is(err, os.ErrNotExist):
+		return &Store{Users: map[string]*UserAchievements{}}, nil
+	default:
 		return nil, err
 	}
-	if store.Users == nil {
-		store.Users = map[string]*UserAchievements{}
-	}
-	return &store, nil
 }
 
 func Save(path string, store *Store) error {

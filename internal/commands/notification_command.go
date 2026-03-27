@@ -50,7 +50,7 @@ func (c *NotificationCommand) ExecuteText(s *discordgo.Session, m *discordgo.Mes
 }
 
 func (c *NotificationCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	if !isAdminOrGold(s, i.GuildID, i.Member.User.ID) {
+	if !isAdminOrGold(s, i.GuildID, interactionUserID(i)) {
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

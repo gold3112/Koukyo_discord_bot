@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -750,78 +751,87 @@ func (t *Tracker) resetBackoff() {
 	t.backoffUntil = time.Time{}
 	t.mu.Unlock()
 }
-
 func (t *Tracker) loadState() {
 	activityPath := filepath.Join(t.dataDir, "user_activity.json")
-	if data, err := os.ReadFile(activityPath); err == nil {
-		var entries map[string]*UserActivity
-		if err := json.Unmarshal(data, &entries); err == nil {
-			dirty := false
-			for _, entry := range entries {
-				expectedScore := entry.RestoredCount - entry.VandalCount
-				if entry.DailyActivityScores == nil || entry.ActivityScore != expectedScore {
-					dirty = true
-				}
-				ensureActivityMaps(entry)
-				entry.ActivityScore = expectedScore
-				entry.DailyActivityScores = buildDailyActivityScores(entry)
-				if entry.VandalCount >= newUserNotifyThreshold && !entry.VandalNotified {
-					entry.VandalNotified = true
-					dirty = true
-				}
-				if entry.RestoredCount >= newUserNotifyThreshold && !entry.FixNotified {
-					entry.FixNotified = true
-					dirty = true
-				}
+	var entries map[string]*UserActivity
+	source, err := utils.ReadJSONFileWithBackup(activityPath, &entries)
+	switch {
+	case err == nil:
+		dirty := source == utils.BackupPath(activityPath)
+		for _, entry := range entries {
+			expectedScore := entry.RestoredCount - entry.VandalCount
+			if entry.DailyActivityScores == nil || entry.ActivityScore != expectedScore {
+				dirty = true
 			}
-			t.activity = entries
-			if dirty {
-				if err := t.saveActivitySnapshot(); err != nil {
-					log.Printf("failed to migrate user activity: %v", err)
-				}
+			ensureActivityMaps(entry)
+			entry.ActivityScore = expectedScore
+			entry.DailyActivityScores = buildDailyActivityScores(entry)
+			if entry.VandalCount >= newUserNotifyThreshold && !entry.VandalNotified {
+				entry.VandalNotified = true
+				dirty = true
+			}
+			if entry.RestoredCount >= newUserNotifyThreshold && !entry.FixNotified {
+				entry.FixNotified = true
+				dirty = true
 			}
 		}
+		if entries != nil {
+			t.activity = entries
+		}
+		if dirty {
+			if err := t.saveActivitySnapshot(); err != nil {
+				log.Printf("failed to migrate user activity: %v", err)
+			}
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		log.Printf("failed to load user activity: %v", err)
 	}
 
 	vandalPath := filepath.Join(t.dataDir, "vandalized_pixels.json")
-	if data, err := os.ReadFile(vandalPath); err == nil {
-		var state VandalState
-		if err := json.Unmarshal(data, &state); err == nil {
-			if state.PixelToPainter == nil {
-				state.PixelToPainter = make(map[string]string)
-			}
-			t.vandalState = state
+	var state VandalState
+	source, err = utils.ReadJSONFileWithBackup(vandalPath, &state)
+	switch {
+	case err == nil:
+		if state.PixelToPainter == nil {
+			state.PixelToPainter = make(map[string]string)
 		}
+		t.vandalState = state
+		if source == utils.BackupPath(vandalPath) {
+			t.dirtyVandalState = true
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		log.Printf("failed to load vandal state: %v", err)
 	}
 }
 
 func (t *Tracker) loadDailyCounts() {
 	path := filepath.Join(t.dataDir, "vandal_daily.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
 	var counts DailyPixelCounts
-	if err := json.Unmarshal(data, &counts); err != nil {
-		return
+	source, err := utils.ReadJSONFileWithBackup(path, &counts)
+	switch {
+	case err == nil:
+		if counts.Vandal == nil {
+			counts.Vandal = make(map[string]int)
+		}
+		if counts.Fix == nil {
+			counts.Fix = make(map[string]int)
+		}
+		t.dailyCounts = counts
+		if source == utils.BackupPath(path) {
+			t.dirtyDailyCounts = true
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		log.Printf("failed to load daily counts: %v", err)
 	}
-	if counts.Vandal == nil {
-		counts.Vandal = make(map[string]int)
-	}
-	if counts.Fix == nil {
-		counts.Fix = make(map[string]int)
-	}
-	t.dailyCounts = counts
 }
 
 func (t *Tracker) saveActivitySnapshot() error {
 	t.mu.Lock()
-	payload, err := json.MarshalIndent(t.activity, "", "  ")
-	t.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	return t.writeFileAtomic("user_activity.json", payload)
+	defer t.mu.Unlock()
+	return saveUserActivityMap(t.dataDir, t.activity)
 }
 
 func (t *Tracker) flushWorker() {
@@ -844,19 +854,18 @@ func (t *Tracker) flushDirtyState() {
 		name string
 		data []byte
 	}
-	payloads := make([]filePayload, 0, 3)
+	payloads := make([]filePayload, 0, 2)
+	var activitySnapshot map[string]*UserActivity
+	flushActivity := false
 
 	t.mu.Lock()
-	flushActivity := t.dirtyActivity
+	flushActivity = t.dirtyActivity
 	flushVandal := t.dirtyVandalState
 	flushDaily := t.dirtyDailyCounts
-
 	if flushActivity {
-		if data, err := json.MarshalIndent(t.activity, "", "  "); err != nil {
-			log.Printf("failed to marshal user activity: %v", err)
-		} else {
-			payloads = append(payloads, filePayload{name: "user_activity.json", data: data})
-			t.dirtyActivity = false
+		activitySnapshot = make(map[string]*UserActivity, len(t.activity))
+		for id, entry := range t.activity {
+			activitySnapshot[id] = entry
 		}
 	}
 	if flushVandal {
@@ -876,6 +885,16 @@ func (t *Tracker) flushDirtyState() {
 		}
 	}
 	t.mu.Unlock()
+
+	if flushActivity {
+		if err := saveUserActivityMap(t.dataDir, activitySnapshot); err != nil {
+			log.Printf("failed to save user_activity.json: %v", err)
+		} else {
+			t.mu.Lock()
+			t.dirtyActivity = false
+			t.mu.Unlock()
+		}
+	}
 
 	for _, p := range payloads {
 		if err := t.writeFileAtomic(p.name, p.data); err != nil {

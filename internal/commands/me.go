@@ -200,6 +200,14 @@ func interactionUser(i *discordgo.InteractionCreate) *discordgo.User {
 	return nil
 }
 
+func interactionUserID(i *discordgo.InteractionCreate) string {
+	user := interactionUser(i)
+	if user == nil {
+		return ""
+	}
+	return user.ID
+}
+
 func meNotLinkedMessage(discordID string) string {
 	return strings.TrimSpace(fmt.Sprintf(
 		"❌ このDiscordアカウントはまだWplaceと関連付けられていません。\n"+

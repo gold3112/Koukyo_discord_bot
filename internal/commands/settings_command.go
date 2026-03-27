@@ -58,7 +58,7 @@ func (c *SettingsCommand) ExecuteText(s *discordgo.Session, m *discordgo.Message
 // ExecuteSlash スラッシュコマンド実行（管理者のみ）
 func (c *SettingsCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	// 権限チェック
-	if !isAdminOrGold(s, i.GuildID, i.Member.User.ID) {
+	if !isAdminOrGold(s, i.GuildID, interactionUserID(i)) {
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

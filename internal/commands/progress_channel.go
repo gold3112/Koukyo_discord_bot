@@ -49,7 +49,7 @@ func (c *ProgressChannelCommand) ExecuteText(s *discordgo.Session, m *discordgo.
 }
 
 func (c *ProgressChannelCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	if !isAdminOrGold(s, i.GuildID, i.Member.User.ID) {
+	if !isAdminOrGold(s, i.GuildID, interactionUserID(i)) {
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

@@ -1,10 +1,52 @@
 package utils
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 )
+
+const backupSuffix = ".bak"
+
+func BackupPath(path string) string {
+	return path + backupSuffix
+}
+
+func ReadJSONFileWithBackup(path string, dest interface{}) (string, error) {
+	source, err := readJSONFile(path, dest)
+	if err == nil {
+		return source, nil
+	}
+
+	backupPath := BackupPath(path)
+	backupSource, backupErr := readJSONFile(backupPath, dest)
+	if backupErr == nil {
+		log.Printf("Recovered JSON from backup: primary=%s backup=%s err=%v", path, backupPath, err)
+		return backupSource, nil
+	}
+
+	if errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return "", err
+}
+
+func readJSONFile(path string, dest interface{}) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return path, nil
+	}
+	if err := json.Unmarshal(data, dest); err != nil {
+		return "", err
+	}
+	return path, nil
+}
 
 // WriteFileAtomic writes payload to filename in a directory in an atomic-like manner.
 // It writes to a temporary file first and then renames it to the destination.
@@ -21,6 +63,8 @@ func WriteFileAtomic(path string, payload []byte) error {
 	}
 	tmpName := tmp.Name()
 	tmpClosed := false
+	existingData, existingErr := os.ReadFile(path)
+	hasExisting := existingErr == nil
 
 	// Ensure cleanup in case of error
 	success := false
@@ -63,5 +107,11 @@ func WriteFileAtomic(path string, payload []byte) error {
 	}
 
 	success = true
+	if hasExisting && len(existingData) > 0 {
+		backupPath := BackupPath(path)
+		if err := os.WriteFile(backupPath, existingData, 0644); err != nil {
+			log.Printf("failed to update backup file %s: %v", backupPath, err)
+		}
+	}
 	return nil
 }
