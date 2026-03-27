@@ -48,3 +48,6 @@ data/*
 !data/get_shortcuts.json
 !data/watch_targets.json
 !data/achievement_rules.json
+
+# Local agent settings
+.claude/
