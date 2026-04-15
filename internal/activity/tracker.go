@@ -96,7 +96,7 @@ const (
 	defaultStateFlushInterval   = 10 * time.Second
 	defaultRecentEventsInterval = 1 * time.Minute
 	defaultActivityGCInterval   = 24 * time.Hour
-	activityRetentionDays       = 30
+	activityRetentionDays       = 36500 // 約100年（実質的に半永久保持）
 )
 
 type powerSaveInferenceState struct {

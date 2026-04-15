@@ -132,9 +132,8 @@ Wplace 直結の主要補助:
 
 - Dirty フラグ方式で定期フラッシュ
 - `utils.WriteFileAtomic` で原子的書き込み
-- 古いユーザーは GC (`activityRetentionDays = 30`)
-
-## 5.2 実績評価 (`achievements.json`)
+- ユーザーデータは半永久的に保持 (`activityRetentionDays = 36500`)
+- 実績評価 (`achievements.json`)
 
 `internal/notifications/notifier_achievements.go` が 1分ごとに評価します。
 

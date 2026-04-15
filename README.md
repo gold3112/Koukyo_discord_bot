@@ -53,6 +53,7 @@ go run ./cmd/bot
 - 差分通知に同時検出ユーザーの内訳表示（`user#id | xxpx`、上位5件）
 - 小規模差分モード（10px以下）: 1つのテキスト通知を更新し続け、差分座標を高倍率URL付きで表示
 - **DM速報** (`/dm on`): 加重差分率10%以上のTier変動をユーザーへDM通知。`/dm off` で解除
+- **Paint回復通知**: `/paint set` でPaint全回復までの時間を計算し、完了時にDMで通知予約が可能。`/paint cancel` で解除
 - 断定推定（vandal/restore 両対応）: 純増/純減のみの変化時に最初の検出ユーザーへ高確率帰属
 - サーバー別設定パネル（`/settings`）
 - ユーザー活動の追跡/可視化（荒らし/修復のスコア・履歴）
@@ -75,6 +76,7 @@ go run ./cmd/bot
 - `timelapse` - 差分率 30%→0.2% のタイムラプス（GIF）
 - `heatmap` - 最近の変化量ヒートマップ
 - `dm` - 自分へのDM速報を有効/無効にする（加重差分率10%以上で通知）
+- `explanation` - 監視項目や用語の解説を表示（スラッシュ専用）
 - `settings` - 通知/閾値などの設定パネル（管理者向け）
 - `notification` - 荒らし/修復ユーザー通知チャンネル設定（管理者向け）
 - `progresschannel` - ピクセルアート進捗通知チャンネル設定（管理者向け）
@@ -100,7 +102,9 @@ go run ./cmd/bot
 - `proxy` - `[Golden Proxy]{display} (@username / userID)` で代理投稿（Webhook）
 - `proxydelete` - 代理投稿メッセージを削除（管理者向け）
 - `time` - 時刻表示/時差変換
-- `paint` - Paint 回復時間の計算（スラッシュ専用）
+- `paint` - Paint 回復時間の計算・通知予約（スラッシュ専用）
+  - `/paint set`: 現在値と上限値を入力し、全回復までの時間を計算。`notify: on` で完了時にDM通知。
+  - `/paint cancel`: 予約されている通知をキャンセル。
 
 ※ `proxy` はチャンネルごとにWebhookを再利用し、Webhook由来の投稿者IDが毎回変わらないようにしています。
 
@@ -182,6 +186,7 @@ JSON 形式は共通です:
 - グラフ (`graph`) は JST 軸で表示します。
 - タイムラプス (`timelapse`) の開始/終了時刻は JST で表示します。
 - 日次サマリ/日次ランキング集計は JST 日付で処理します。
+- Paint回復通知 (`paint`) はユーザーが指定したタイムゾーン（既定: JST）で時刻を表示します。
 
 ## 日次/タイムラプス配信
 
@@ -194,7 +199,7 @@ JSON 形式は共通です:
 - `data/settings.json`
 - `data/user_dm.json` (DM速報の有効ユーザー一覧)
 - `data/achievement_rules.json` (実績付与ルール定義)
-- `data/user_activity.json`
+- `data/user_activity.json` (ユーザーの活動統計データを半永久的に保持)
 - `data/vandalized_pixels.json`
 - `data/vandal_daily.json`
 - `data/achievements.json`
