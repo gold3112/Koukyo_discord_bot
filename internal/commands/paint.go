@@ -9,16 +9,21 @@ import (
 )
 
 type PaintCommand struct {
-	// 通知管理は後で追加
+	notifier *notifications.Notifier
+	timers   map[string]*time.Timer
+	mu       sync.RWMutex
 }
 
-func NewPaintCommand() *PaintCommand {
-	return &PaintCommand{}
+func NewPaintCommand(n *notifications.Notifier) *PaintCommand {
+	return &PaintCommand{
+		notifier: n,
+		timers:   make(map[string]*time.Timer),
+	}
 }
 
 func (c *PaintCommand) Name() string { return "paint" }
 func (c *PaintCommand) Description() string {
-	return "Paint回復時間の計算・通知を行います (30秒/1回復)"
+	return "Paint回復時間の計算・通知設定を行います"
 }
 
 func (c *PaintCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCreate, args []string) error {
@@ -27,11 +32,29 @@ func (c *PaintCommand) ExecuteText(s *discordgo.Session, m *discordgo.MessageCre
 }
 
 func (c *PaintCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	options := i.ApplicationCommandData().Options
+	if len(options) == 0 {
+		return respond(s, i, "❌ サブコマンドを指定してください (`set` または `cancel`)")
+	}
+
+	subcommand := options[0]
+	switch subcommand.Name {
+	case "set":
+		return c.handleSet(s, i, subcommand.Options)
+	case "cancel":
+		return c.handleCancel(s, i)
+	default:
+		return respond(s, i, "❌ 未知のサブコマンドです")
+	}
+}
+
+func (c *PaintCommand) handleSet(s *discordgo.Session, i *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) error {
 	var current, max int
 	notify := false
-	selectedTimezone := "JST" // デフォルトをJSTに設定
+	selectedTimezone := "JST"
+	userID := i.Member.User.ID
 
-	for _, opt := range i.ApplicationCommandData().Options {
+	for _, opt := range options {
 		switch opt.Name {
 		case "current":
 			current = int(opt.IntValue())
@@ -41,15 +64,13 @@ func (c *PaintCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interacti
 			if opt.StringValue() == "on" {
 				notify = true
 			}
-		case "timezone": // timezone オプションを解析
+		case "timezone":
 			selectedTimezone = opt.StringValue()
 		}
 	}
+
 	if current < 0 || max <= 0 || current > max {
 		return respond(s, i, "❌ 入力値が不正です (今:0以上, 上限:1以上, 今≦上限)")
-	}
-	if remain := max - current; remain == 0 {
-		return respond(s, i, "🎉 すでに全回復しています！")
 	}
 
 	// タイムゾーンをロード
@@ -58,27 +79,65 @@ func (c *PaintCommand) ExecuteSlash(s *discordgo.Session, i *discordgo.Interacti
 		return respond(s, i, fmt.Sprintf("❌ 無効なタイムゾーンが指定されました: %s", selectedTimezone))
 	}
 
-	// 現在時刻をロードしたタイムゾーンで取得
 	nowInLoc := time.Now().In(loc)
-
 	remain := max - current
-	recoverSec := remain * 30
-	finish := nowInLoc.Add(time.Duration(recoverSec) * time.Second)
+	if remain == 0 {
+		return respond(s, i, "🎉 すでに全回復しています！")
+	}
 
-	// タイムゾーン情報を含めてフォーマット
+	recoverSec := remain * 30
+	duration := time.Duration(recoverSec) * time.Second
+	finish := nowInLoc.Add(duration)
+
 	msg := fmt.Sprintf(
 		"🖌️ Paint回復計算\n残り: **%d** 回\n全回復まで: **%d分%d秒**\n全回復時刻: **%s (%s)**",
 		remain,
 		recoverSec/60,
 		recoverSec%60,
-		finish.Format("15:04:05"), // フォーマットはそのまま、時刻自体が指定TZになる
-		finish.Format("MST"),      // タイムゾーン略称を追加
+		finish.Format("15:04:05"),
+		finish.Format("MST"),
 	)
+
 	if notify {
-		msg += "\n\n🔔 全回復時に通知します！"
-		// 通知管理は後で実装
+		if c.notifier == nil {
+			msg += "\n⚠️ 通知システムが利用できないため、通知予約はスキップされました。"
+		} else {
+			c.mu.Lock()
+			// 既存のタイマーがあればキャンセル
+			if oldTimer, ok := c.timers[userID]; ok {
+				oldTimer.Stop()
+			}
+
+			// 新しいタイマーをセット
+			c.timers[userID] = time.AfterFunc(duration, func() {
+				c.mu.Lock()
+				delete(c.timers, userID)
+				c.mu.Unlock()
+				c.notifier.EnqueueHigh(func() {
+					c.notifier.NotifyPaintRecovery(userID, max)
+				})
+			})
+			c.mu.Unlock()
+
+			msg += "\n\n🔔 全回復時にDMで通知します！\n(キャンセルする場合は `/paint cancel` を実行してください)"
+		}
 	}
+
 	return respond(s, i, msg)
+}
+
+func (c *PaintCommand) handleCancel(s *discordgo.Session, i *discordgo.InteractionCreate) error {
+	userID := i.Member.User.ID
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if timer, ok := c.timers[userID]; ok {
+		timer.Stop()
+		delete(c.timers, userID)
+		return respond(s, i, "✅ Paint回復通知の予約をキャンセルしました。")
+	}
+
+	return respond(s, i, "ℹ️ 予約されている通知はありません。")
 }
 
 func (c *PaintCommand) SlashDefinition() *discordgo.ApplicationCommand {
@@ -87,7 +146,7 @@ func (c *PaintCommand) SlashDefinition() *discordgo.ApplicationCommand {
 	for _, tz := range commonTimezones {
 		timezoneChoices = append(timezoneChoices, &discordgo.ApplicationCommandOptionChoice{
 			Name:  fmt.Sprintf("%s (%s)", tz.Label, tz.Location.String()),
-			Value: tz.Name, // ParseTimezone に渡せる値
+			Value: tz.Name,
 		})
 	}
 
@@ -96,33 +155,45 @@ func (c *PaintCommand) SlashDefinition() *discordgo.ApplicationCommand {
 		Description: c.Description(),
 		Options: []*discordgo.ApplicationCommandOption{
 			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "current",
-				Description: "現在のPaint数",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "max",
-				Description: "Paint上限値",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "notify",
-				Description: "全回復時に通知 (on/off)",
-				Required:    false,
-				Choices: []*discordgo.ApplicationCommandOptionChoice{
-					{Name: "on", Value: "on"},
-					{Name: "off", Value: "off"},
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "set",
+				Description: "Paint回復時間の計算と通知設定を行います",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionInteger,
+						Name:        "current",
+						Description: "現在のPaint数",
+						Required:    true,
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionInteger,
+						Name:        "max",
+						Description: "Paint上限値",
+						Required:    true,
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "notify",
+						Description: "全回復時に通知 (on/off)",
+						Required:    false,
+						Choices: []*discordgo.ApplicationCommandOptionChoice{
+							{Name: "on", Value: "on"},
+							{Name: "off", Value: "off"},
+						},
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "timezone",
+						Description: "タイムゾーン (デフォルト: JST)",
+						Required:    false,
+						Choices:     timezoneChoices,
+					},
 				},
 			},
 			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "timezone",
-				Description: "タイムゾーン (デフォルト: JST)",
-				Required:    false,
-				Choices:     timezoneChoices,
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "cancel",
+				Description: "設定されているPaint回復通知をキャンセルします",
 			},
 		},
 	}
